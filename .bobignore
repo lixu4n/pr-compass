@@ -1,0 +1,31 @@
+# Dependencies and build output — Bob does not need to read these
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+node_modules/.tmp/
+
+# Secrets — Bob must not read these
+.env
+.env.*
+*.key
+*.pem
+secrets/
+
+# OS and editor noise
+.DS_Store
+*.swp
+*.swo
+
+# Bob session screenshots — binary files, not source code
+bob_sessions/**/*.png
+bob_sessions/**/*.jpg
+bob_sessions/**/*.gif
+bob_sessions/**/*.webp
+
+# Evidence run logs — may be large; Bob reads them only on request
+evidence/runs/
+
+# NOTE: .bobignore controls Bob's file-access tools but does not create a
+# system-level sandbox. It is not a substitute for proper secrets management.
+# Some write operations may bypass these restrictions — see Bob documentation.
