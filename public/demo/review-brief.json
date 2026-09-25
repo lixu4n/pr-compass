@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactKind": "mock",
-  "producedAt": null,
+  "producedAt": "2025-07-14T17:15:00Z",
   "pr": {
     "title": "Return 404 when search yields no results",
     "url": null,
@@ -15,82 +15,64 @@
   "behavioralChanges": [
     {
       "id": "bc-1",
-      "summary": "Empty search results now return HTTP 404 instead of HTTP 200 with an empty list.",
-      "before": "GET /search?q=unknown → 200 OK, body: { \"results\": [] }\n\nsearch() always returns { status: 200, body: { results } } regardless of whether results is empty.",
-      "after": "GET /search?q=unknown → 404 Not Found, body: { \"error\": \"No results found\" }\n\nsearch() would return status 404 when results array is empty.",
-      "evidenceKind": "inference",
+      "summary": "search() now returns status 404 + error body when no documents match, instead of status 200 + empty results array.",
+      "before": "search('zzz-no-match') → { status: 200, body: { results: [] } }",
+      "after": "search('zzz-no-match') → { status: 404, body: { error: 'No results found' } }",
+      "evidenceKind": "fact",
       "sources": [
         {
           "file": "sample-project/src/searchService.ts",
-          "lines": "41-56",
+          "lines": "59-64",
           "commitSha": null,
-          "note": "Baseline search() function — always returns status: 200. The proposed change would branch here to return 404 when results.length === 0."
+          "note": "New branch: if results.length === 0, return { status: 404, body: { error: 'No results found' } }."
         },
         {
           "file": "sample-project/src/searchService.ts",
-          "lines": "16-19",
+          "lines": "17-27",
           "commitSha": null,
-          "note": "SearchResponse interface only permits status: 200. The type must be widened to allow 404 before the change can compile."
-        },
-        {
-          "file": "docs/sample-context/issue.md",
-          "lines": "14-17",
-          "commitSha": null,
-          "note": "Task description confirming the proposed response-code change."
+          "note": "SearchResponse type widened from a single { status: 200 } interface to a union: SearchResponseOk | SearchResponseNotFound."
         }
       ]
     },
     {
       "id": "bc-2",
-      "summary": "The client empty-state display path changes: it must now handle a 404 response rather than checking for an empty array.",
-      "before": "interpretResponse() checks response.body.results.length === 0 to decide whether to return { kind: 'empty' }.",
-      "after": "interpretResponse() must detect a 404-status response (and its { error } body) to return { kind: 'empty' }, since the 200 path will no longer carry an empty results array.",
-      "evidenceKind": "inference",
+      "summary": "Blank and whitespace-only queries now also return 404, not 200 + empty list. The blank-query path was not explicitly covered in the PR description.",
+      "before": "search('   ') → { status: 200, body: { results: [] } }",
+      "after": "search('   ') → { status: 404, body: { error: 'No results found' } }",
+      "evidenceKind": "fact",
       "sources": [
         {
-          "file": "sample-project/src/searchClient.ts",
-          "lines": "24-29",
+          "file": "sample-project/src/searchService.ts",
+          "lines": "50-64",
           "commitSha": null,
-          "note": "interpretResponse() currently assumes status 200 always and branches only on results.length. This logic breaks when the service returns 404."
+          "note": "Blank query still produces results = [] via the q.length === 0 early path, then falls into the same results.length === 0 branch that returns 404."
         },
         {
-          "file": "sample-project/src/searchClient.ts",
-          "lines": "9",
+          "file": "sample-project/tests/searchService.test.ts",
+          "lines": "32-35",
           "commitSha": null,
-          "note": "Import of SearchResponse type — currently typed as status: 200 only. Must be updated to accept the new 404 variant."
-        },
-        {
-          "file": "docs/sample-context/compatibility.md",
-          "lines": "18-22",
-          "commitSha": null,
-          "note": "Compatibility note explicitly identifies interpretResponse() and the SearchResponse type as the two client-side touch points."
+          "note": "Existing test asserts body.results === [] for blank query — now fails because body has no 'results' key on a 404 response."
         }
       ]
     },
     {
       "id": "bc-3",
-      "summary": "Existing unit tests that assert status: 200 on a no-results query will fail after the change.",
-      "before": "searchService.test.ts asserts response.status === 200 for 'zzz-no-match'. searchClient.test.ts constructs SearchResponse with status: 200 and an empty results array.",
-      "after": "These tests must be updated: the service test should assert status 404, and the client test must supply a 404-shaped response for the empty-state case.",
+      "summary": "searchClient.ts is not updated: interpretResponse() still accesses response.body.results unconditionally, which is a TypeScript type error and a runtime crash on any 404 response.",
+      "before": "interpretResponse() assumed response.body always has a results array and branched on its length.",
+      "after": "The service now returns a body with an error string (not a results array) on 404. interpretResponse() has not been updated — it will access .results on a 404 body, returning undefined at runtime.",
       "evidenceKind": "fact",
       "sources": [
         {
-          "file": "sample-project/tests/searchService.test.ts",
-          "lines": "5-8",
+          "file": "sample-project/src/searchClient.ts",
+          "lines": "24-29",
           "commitSha": null,
-          "note": "Directly asserts status 200 for a no-match query — will fail if service returns 404."
+          "note": "interpretResponse() reads response.body.results.length unconditionally. TypeScript now reports: Property 'results' does not exist on type '{ error: string }'."
         },
         {
-          "file": "sample-project/tests/searchService.test.ts",
-          "lines": "10-13",
+          "file": "sample-project/src/searchClient.ts",
+          "lines": "19-23",
           "commitSha": null,
-          "note": "Asserts empty results array on 200 response — test shape becomes invalid after the change."
-        },
-        {
-          "file": "sample-project/tests/searchClient.test.ts",
-          "lines": "6-9",
-          "commitSha": null,
-          "note": "Constructs a SearchResponse with { status: 200, body: { results: [] } } — this response shape will no longer be emitted by the service."
+          "note": "JSDoc comment still describes the baseline 200-only assumption — the function was not updated as part of this change."
         }
       ]
     }
@@ -98,46 +80,46 @@
   "reviewLocations": [
     {
       "order": 1,
-      "label": "searchService.ts — SearchResponse type and search() return branch",
-      "reason": "The type must be widened from status: 200 only to a union including 404, and the search() function needs a conditional return for the empty-results case. These are the two lines of code that define the entire contract change.",
+      "label": "searchClient.ts:24-29 — interpretResponse() not updated",
+      "reason": "This is the most critical gap: the service change is incomplete without a corresponding client update. interpretResponse() accesses response.body.results unconditionally and will crash at runtime on a 404 response. TypeScript already flags this as a type error on lines 25 and 28.",
       "source": {
-        "file": "sample-project/src/searchService.ts",
-        "lines": "16-56",
+        "file": "sample-project/src/searchClient.ts",
+        "lines": "24-29",
         "commitSha": null,
-        "note": "Covers both the SearchResponse interface (lines 16-19) and the search() function body (lines 41-56)."
+        "note": "Must branch on response.status (200 vs 404) before accessing body fields."
       }
     },
     {
       "order": 2,
-      "label": "searchClient.ts — interpretResponse() and SearchResponse import",
-      "reason": "interpretResponse() must be updated to branch on status rather than results.length. The imported SearchResponse type must also accept the 404 variant. If this is not updated, the client will either silently mishandle 404 as a 'results' state or fail a TypeScript compile.",
+      "label": "searchService.test.ts:5-13 and 32-35 — 3 failing tests",
+      "reason": "Three tests assert the old behavior and now fail: status 200 for no-match (line 7), body.results === [] for no-match (line 12), and body.results === [] for blank query (line 34). These need to be rewritten to assert the 404 shape.",
       "source": {
-        "file": "sample-project/src/searchClient.ts",
-        "lines": "9-29",
+        "file": "sample-project/tests/searchService.test.ts",
+        "lines": "5-35",
         "commitSha": null,
-        "note": "Import (line 9) and interpretResponse() function (lines 24-29) are both affected."
+        "note": "Confirmed failing via test run: 3 failures, all in this file."
       }
     },
     {
       "order": 3,
-      "label": "searchService.test.ts — no-results status assertion",
-      "reason": "Line 7 asserts status 200 for a no-match query. This test will fail after the change and must be updated to assert 404. It is also the place to add a test for the new error body shape.",
-      "source": {
-        "file": "sample-project/tests/searchService.test.ts",
-        "lines": "5-13",
-        "commitSha": null,
-        "note": "Two tests covering the no-results path; both become invalid after the change."
-      }
-    },
-    {
-      "order": 4,
-      "label": "searchClient.test.ts — empty-state fixture",
-      "reason": "The empty-state test constructs a { status: 200, body: { results: [] } } fixture. After the change the service no longer produces this shape for empty results; the fixture must be replaced with a 404-shaped response.",
+      "label": "searchClient.test.ts:6-9 — false-passing empty-state test",
+      "reason": "The empty-state test passes today because it constructs its own { status: 200, body: { results: [] } } fixture manually. But this shape is no longer emitted by the service. Once interpretResponse() is fixed, this fixture must be replaced with a 404-shaped response to test the real path.",
       "source": {
         "file": "sample-project/tests/searchClient.test.ts",
         "lines": "6-9",
         "commitSha": null,
-        "note": "interpretResponse empty-state test — fixture shape becomes stale."
+        "note": "Test passes now but will need updating once interpretResponse() branches on status."
+      }
+    },
+    {
+      "order": 4,
+      "label": "searchService.ts:50-64 — blank query coverage",
+      "reason": "The blank-query path (q.length === 0 → results = []) now also returns 404 as a side effect of the shared results.length === 0 branch. It is not mentioned in the PR description. Confirm whether this is intentional.",
+      "source": {
+        "file": "sample-project/src/searchService.ts",
+        "lines": "50-64",
+        "commitSha": null,
+        "note": "Blank query flows into the same 404 branch as a no-match query. May be intentional, but is undocumented."
       }
     }
   ],
@@ -145,65 +127,58 @@
     {
       "id": "d-1",
       "question": "Is HTTP 404 the right status code for a valid query that returns zero results?",
-      "context": "REST conventions differ: 200 + empty list means the collection exists but has no matching items; 404 means no resource was found. The compatibility note flags this as an open question requiring explicit team agreement.",
-      "stakes": "If 404 is chosen, all current and future clients must distinguish 'empty results' from 'server error'. Caching layers may treat 404 differently from 200. If another team later adopts 200 + empty list as the standard, this endpoint will be a special case.",
+      "context": "REST conventions differ: 200 + empty list signals the collection exists but nothing matched; 404 signals no resource was found. The compatibility note in docs/sample-context/compatibility.md explicitly flags this as needing team agreement.",
+      "stakes": "If 404 is used, all clients must distinguish 'empty results' from genuine errors. Caching layers and proxies may also treat 404 differently from 200, causing unexpected behavior.",
       "evidenceKind": "unknown",
       "sources": [
         {
           "file": "docs/sample-context/compatibility.md",
           "lines": "35-42",
           "commitSha": null,
-          "note": "Explicit call-out that this decision needs team agreement before implementation."
+          "note": "Explicit open question flagged before implementation."
         }
       ]
     },
     {
       "id": "d-2",
-      "question": "Should a blank or whitespace-only query also return 404, or remain 200 + empty?",
-      "context": "The current search() function treats a blank query as a special case that returns an empty list (line 44-45 of searchService.ts). The proposed change description mentions only 'no results found' — it is unclear whether a blank query is covered by the same 404 rule.",
-      "stakes": "If blank queries return 404, clients that use blank queries as a 'show nothing' initial state will break. If they remain 200 + empty, there are now two empty-result shapes, which complicates client logic.",
+      "question": "Is returning 404 for a blank/whitespace query intentional?",
+      "context": "The blank-query path previously returned 200 + empty list as a documented special case. The new code returns 404 for blank queries as a side effect — not because they are a 'search miss' but because the shared results.length === 0 branch catches them too.",
+      "stakes": "If a caller uses a blank query as an initial 'show nothing' state, it will now receive a 404 and may surface an error to the user instead of an empty state.",
       "evidenceKind": "inference",
       "sources": [
         {
           "file": "sample-project/src/searchService.ts",
-          "lines": "43-46",
+          "lines": "45-46",
           "commitSha": null,
-          "note": "Blank query is handled by q.length === 0 check — an explicit early-return path distinct from the filter producing zero results."
-        },
-        {
-          "file": "sample-project/tests/searchService.test.ts",
-          "lines": "32-35",
-          "commitSha": null,
-          "note": "Existing test asserts empty list for blank query — would need updating if blank queries also return 404."
+          "note": "q.length === 0 path sets results = [] then falls through to the 404 branch."
         }
       ]
     }
   ],
   "checks": [
     {
-      "name": "Unit tests pass on head branch",
-      "status": "not-run",
-      "detail": null,
-      "notRunReason": "The feat/404-empty-search branch does not exist yet; there is no head commit to test against."
+      "name": "Unit tests pass",
+      "status": "failed",
+      "detail": "3 failures in sample-project/tests/searchService.test.ts: 'returns status 200 for a query with no results' (line 7), 'returns an empty results array for a query with no matches' (line 12), 'returns empty list for a blank query' (line 34).",
+      "notRunReason": null
     },
     {
       "name": "TypeScript compilation clean",
-      "status": "not-run",
-      "detail": null,
-      "notRunReason": "No head branch code has been compiled. The baseline compiles cleanly; the proposed change will require type widening before it can compile."
+      "status": "failed",
+      "detail": "8 type errors: 2 in sample-project/src/searchClient.ts (lines 25, 28) and 6 in sample-project/tests/searchService.test.ts (lines 12, 22, 23, 29×2, 34). All report: Property 'results' does not exist on type '{ results: SearchResult[] } | { error: string }'.",
+      "notRunReason": null
     },
     {
       "name": "No existing callers broken",
-      "status": "not-run",
-      "detail": null,
-      "notRunReason": "Caller audit is based on the baseline source. searchClient.ts is the only known consumer per docs/sample-context/compatibility.md, but this cannot be confirmed without a real diff."
+      "status": "failed",
+      "detail": "searchClient.ts:interpretResponse() is broken — it accesses response.body.results unconditionally on a type that no longer guarantees that field. It is the only known caller per docs/sample-context/compatibility.md.",
+      "notRunReason": null
     }
   ],
   "limitations": [
-    "The feat/404-empty-search branch does not exist. All behavioral change descriptions are inferred from the task description in docs/sample-context/issue.md and the compatibility analysis in docs/sample-context/compatibility.md — not from an observed diff.",
-    "Commit SHAs are unavailable. Source references cite baseline file paths and line numbers; these may shift once the change is implemented.",
-    "Line numbers are based on the current baseline files. They will differ in the actual PR diff.",
-    "No real HTTP server exists. The 'endpoint' behavior is simulated through direct TypeScript function calls; HTTP-level concerns (caching, CDN behavior on 404, reverse-proxy handling) are outside the scope of this simulation.",
-    "The blank-query edge case (d-2) was not addressed in the task description and may be an oversight."
+    "No git repository is initialised in this workspace. Commit SHAs are unavailable; all source references use file paths and line numbers only.",
+    "The 'baseline' is inferred from the previous state of sample-project/src/searchService.ts and the docs/sample-context/ notes — not from a git diff.",
+    "searchClient.test.ts currently passes despite the contract change because it constructs its own fixtures. This creates a false sense of coverage until interpretResponse() is fixed.",
+    "No HTTP server exists. All behavior described as 'endpoint' responses is simulated through direct TypeScript function calls."
   ]
 }

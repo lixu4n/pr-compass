@@ -6,17 +6,25 @@
  * server here; the "response" objects are plain data structures that mimic
  * what an HTTP handler would return.
  *
- * Baseline behavior (current, on `main`):
- *   - A query that matches no documents returns status 200 and an empty list.
+ * Changed behavior (on feat/404-empty-search):
+ *   - A query that matches no documents returns status 404 and an error body.
+ *   - A query that matches documents still returns status 200 and a results list.
  *
- * A future PR will propose changing this so that no results → 404.
- * That change is NOT implemented here. Git will preserve this baseline.
+ * Baseline behavior (on main):
+ *   - A search with no results returns status 200 and an empty list.
  */
 
-export interface SearchResponse {
+export interface SearchResponseOk {
   status: 200
   body: { results: SearchResult[] }
 }
+
+export interface SearchResponseNotFound {
+  status: 404
+  body: { error: string }
+}
+
+export type SearchResponse = SearchResponseOk | SearchResponseNotFound
 
 export interface SearchResult {
   id: string
@@ -34,9 +42,8 @@ const DOCUMENTS: SearchResult[] = [
 /**
  * Simulates a search query against the in-memory document store.
  *
- * Baseline: always returns 200.
- * - If documents match, body.results is non-empty.
- * - If no documents match, body.results is an empty array.
+ * Changed: returns 404 when no results are found (including blank query).
+ * Returns 200 only when at least one result matches.
  */
 export function search(query: string): SearchResponse {
   const q = query.trim().toLowerCase()
@@ -48,6 +55,13 @@ export function search(query: string): SearchResponse {
             doc.title.toLowerCase().includes(q) ||
             doc.snippet.toLowerCase().includes(q),
         )
+
+  if (results.length === 0) {
+    return {
+      status: 404,
+      body: { error: 'No results found' },
+    }
+  }
 
   return {
     status: 200,
