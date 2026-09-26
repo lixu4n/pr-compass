@@ -40,7 +40,7 @@ export interface PullRequest {
   body: string | null
   state: string
   draft: boolean
-  base: { sha: string; ref: string; repo: { full_name: string } }
+  base: { sha: string; ref: string; repo: { full_name: string; private?: boolean } }
   head: { sha: string; ref: string; repo: { full_name: string } | null }
   user: { login: string; type: string } | null
   html_url: string
@@ -127,9 +127,12 @@ export interface SkipReason {
 }
 
 export function shouldSkip(pr: PullRequest): SkipReason | null {
-  const headRepo = pr.head.repo?.full_name ?? null
+  if (pr.state !== 'open') return { skip: true, reason: 'PR is no longer open.' }
+  if (pr.base.repo.private) return { skip: true, reason: 'Private repositories are outside this public-demo MVP.' }
+  if (!pr.head.repo) return { skip: true, reason: 'Head repository is unavailable.' }
+  const headRepo = pr.head.repo.full_name
   const baseRepo = pr.base.repo.full_name
-  const isFork = headRepo !== null && headRepo !== baseRepo
+  const isFork = headRepo.toLowerCase() !== baseRepo.toLowerCase()
   if (isFork) return { skip: true, reason: 'Fork PRs are not supported.' }
   if (pr.draft) return { skip: true, reason: 'Draft PRs are skipped.' }
   const login = pr.user?.login ?? ''

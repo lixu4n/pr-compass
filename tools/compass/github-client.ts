@@ -17,7 +17,7 @@ import type {
   RepoContent,
   MergeBase,
 } from './collect.js'
-import type { GitHubPublishProvider, GitHubComment } from './publish.js'
+import type { GitHubPublishProvider, GitHubComment, PublicationState } from './publish.js'
 
 function createOctokit(token: string): Octokit {
   return new Octokit({ auth: token })
@@ -71,11 +71,22 @@ export class OctokitGitHubProvider implements GitHubProvider {
 // Publish provider
 // ---------------------------------------------------------------------------
 
+export const ACTIONS_BOT_LOGIN = 'github-actions[bot]'
+
 export class OctokitPublishProvider implements GitHubPublishProvider {
   private octokit: Octokit
 
-  constructor(token: string) {
-    this.octokit = createOctokit(token)
+  constructor(token: string, client?: Octokit) {
+    // This MVP supports GitHub.com's standard Actions GITHUB_TOKEN only.
+    // GITHUB_ACTIONS is a setup guardrail, not proof of a token's identity.
+    if (!token.trim()) throw new Error('GitHub publication requires GITHUB_TOKEN.')
+    if (process.env.GITHUB_ACTIONS !== 'true') {
+      throw new Error('Live publication is supported only in GitHub Actions; use dry-run locally.')
+    }
+    if (/^(ghp_|github_pat_)/.test(token)) {
+      throw new Error('Personal access tokens are not supported for publication; use the standard Actions GITHUB_TOKEN.')
+    }
+    this.octokit = client ?? createOctokit(token)
   }
 
   async listComments(owner: string, repo: string, prNumber: number, page: number, perPage: number): Promise<GitHubComment[]> {
@@ -97,18 +108,24 @@ export class OctokitPublishProvider implements GitHubPublishProvider {
     await this.octokit.issues.updateComment({ owner, repo, comment_id: commentId, body })
   }
 
-  async getPrHeadSha(owner: string, repo: string, prNumber: number): Promise<string> {
-    const pr = await this.getPullRequest(owner, repo, prNumber)
-    return pr.head.sha
+  async getPublicationState(owner: string, repo: string, prNumber: number): Promise<PublicationState> {
+    const { data } = await this.octokit.pulls.get({ owner, repo, pull_number: prNumber })
+    return {
+      headSha: data.head.sha,
+      baseSha: data.base.sha,
+      state: data.state,
+      draft: data.draft ?? true,
+      baseRepository: data.base.repo.full_name,
+      headRepository: data.head.repo?.full_name ?? null,
+      isPrivate: data.base.repo.private,
+      authorIsBot: !data.user || data.user.type === 'Bot' ||
+        data.user.login.endsWith('[bot]') || data.user.login === 'dependabot',
+    }
   }
 
   async getBotLogin(): Promise<string> {
-    const { data } = await this.octokit.users.getAuthenticated()
-    return data.login
-  }
-
-  private async getPullRequest(owner: string, repo: string, prNumber: number): Promise<PullRequest> {
-    const { data } = await this.octokit.pulls.get({ owner, repo, pull_number: prNumber })
-    return { ...data, draft: data.draft ?? true }
+    // Installation tokens do not identify a user via GET /user. Match the
+    // documented built-in Actions bot for this explicitly supported setup.
+    return ACTIONS_BOT_LOGIN
   }
 }

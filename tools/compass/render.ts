@@ -34,6 +34,10 @@ export const WORD_FLOOR = 150
 export function escapeMarkdown(text: string): string {
   return (
     text
+      // Keep untrusted prose from becoming HTML inside the bot comment.
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
       // Escape standard Markdown metacharacters
       .replace(/([\\`*_{}[\]()#+\-.!|])/g, '\\$1')
       // Neutralize @mentions (insert zero-width space after @)
@@ -203,7 +207,7 @@ export function renderUnavailable(brief: ContextBrief): string {
   const body =
     `> **Context brief unavailable** for \`${headShort}\`\n>\n` +
     `> ${reason}\n>\n` +
-    `> No earlier brief has been updated with unverified data.`
+    `> No verified context is available for this snapshot. Human review is still required.`
 
   return [COMPASS_MARKER, body, renderProvenance(brief)].join('\n\n')
 }

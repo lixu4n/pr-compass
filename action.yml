@@ -22,8 +22,8 @@ inputs:
     required: true
   github_token:
     description: >
-      GitHub token with contents:read and pull-requests:write permissions.
-      Pass as ${{ secrets.GITHUB_TOKEN }} — never hard-code.
+      Standard GitHub Actions GITHUB_TOKEN with contents:read and pull-requests:write.
+      PATs and custom App tokens are not supported for publication. Never hard-code.
     required: true
   bob_api_key:
     description: >
@@ -37,9 +37,9 @@ inputs:
     required: false
     default: 'bob'
   dry_run:
-    description: 'Set to "true" to run analysis without posting a comment'
+    description: 'True by default: analyze without posting. Explicit false enables GitHub Actions publication; dry-run may still spend Bobcoins.'
     required: false
-    default: 'false'
+    default: 'true'
   allow_repair:
     description: 'One optional repair; splits max_cost between two invocations, not two full budgets'
     required: false

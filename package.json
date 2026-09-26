@@ -15,7 +15,7 @@
     "lint": "eslint src --ext .ts,.tsx --report-unused-disable-directives --max-warnings 0",
     "build:action": "node scripts/build-action.mjs",
     "check:package": "node action-dist/index.mjs --check-package",
-    "test:action": "node scripts/build-action.mjs && node --test scripts/action-package.test.mjs"
+    "test:action": "node scripts/build-action.mjs && node --test scripts/action-package.test.mjs scripts/action-pipeline.test.mjs"
   },
   "dependencies": {
     "@octokit/rest": "21.1.1",

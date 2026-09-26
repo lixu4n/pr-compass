@@ -12,7 +12,7 @@ import {
   findCompassComment,
   COMPASS_MARKER,
 } from '../../tools/compass/publish.js'
-import type { GitHubPublishProvider, GitHubComment } from '../../tools/compass/publish.js'
+import type { GitHubPublishProvider, GitHubComment, PublicationState } from '../../tools/compass/publish.js'
 
 // ---------------------------------------------------------------------------
 // Test provider
@@ -45,7 +45,12 @@ class TestPublishProvider implements GitHubPublishProvider {
     if (comment) comment.body = body
   }
 
-  async getPrHeadSha(): Promise<string> { return this.currentHeadSha }
+  async getPublicationState(): Promise<PublicationState> {
+    return {
+      headSha: this.currentHeadSha, baseSha: '0'.repeat(40), state: 'open', draft: false,
+      baseRepository: 'owner/repo', headRepository: 'owner/repo', isPrivate: false, authorIsBot: false,
+    }
+  }
   async getBotLogin(): Promise<string> { return this.botLogin }
 }
 
@@ -180,9 +185,9 @@ describe('publish — stale SHA', () => {
 // ---------------------------------------------------------------------------
 
 describe('publish — error handling', () => {
-  it('returns ok:false when getPrHeadSha throws', async () => {
+  it('returns ok:false when getPublicationState throws', async () => {
     class BrokenProvider extends TestPublishProvider {
-      override async getPrHeadSha(): Promise<string> { throw new Error('network error') }
+      override async getPublicationState(): Promise<PublicationState> { throw new Error('network error') }
     }
     const result = await publish(new BrokenProvider(), BASE_OPTIONS)
     expect(result.ok).toBe(false)

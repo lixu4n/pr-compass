@@ -31,6 +31,9 @@ secrets/
 # Test coverage
 coverage/
 
+# Locally generated analysis artifacts (inspect before explicitly sharing)
+compass-output/
+
 # Logs
 *.log
 npm-debug.log*

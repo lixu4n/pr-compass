@@ -9,7 +9,8 @@
  *   GITHUB_TOKEN        — required for GitHub API calls (publish)
  *   BOB_API_KEY         — required for live Bob Shell analysis
  *   BOB_PATH            — path to bob executable (default: "bob")
- *   COMPASS_DRY_RUN     — set to "true" to skip publishing
+ *   COMPASS_DRY_RUN     — true by default; explicit false enables Actions publication
+ *   COMPASS_OUTPUT_DIR  — local artifact directory (default: compass-output/)
  *   COMPASS_ALLOW_REPAIR— optional repair; splits the same analysis cost budget
  *   COMPASS_MAX_COST    — requested total Bobcoin limit (default 0.5; maximum 1)
  *   COMPASS_MAX_TURNS   — per-invocation turn limit (default 4; maximum 8)
@@ -26,11 +27,12 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { collect } from './collect.js'
-import { analyze, LiveBobProvider } from './analyze.js'
+import { analyze, LiveBobProvider, redactSecrets } from './analyze.js'
 import { runtimeLimits } from './bob-runtime.js'
 import { validateBrief } from './validate.js'
-import { render, renderUnavailable } from './render.js'
+import { render } from './render.js'
 import { publish } from './publish.js'
+import { saveArtifacts } from './artifacts.js'
 import type { CollectionResult } from './collect.js'
 import type { ContextBrief } from '../../src/types/ContextBrief.js'
 import { OctokitGitHubProvider } from './github-client.js'
@@ -50,6 +52,12 @@ function getRequiredEnv(name: string): string {
 
 function getEnv(name: string, fallback = ''): string {
   return process.env[name] ?? fallback
+}
+
+function getBoolean(name: string, fallback = false): boolean {
+  const value = getEnv(name, String(fallback))
+  if (value !== 'true' && value !== 'false') throw new Error(`${name} must be true or false.`)
+  return value === 'true'
 }
 
 async function readTrustedInstructions(): Promise<string> {
@@ -113,9 +121,14 @@ async function main(): Promise<void> {
   // 1. Read inputs
   const owner = getRequiredEnv('INPUT_OWNER')
   const repo = getRequiredEnv('INPUT_REPO')
-  const prNumber = parseInt(getRequiredEnv('INPUT_PR_NUMBER'), 10)
-  const dryRun = getEnv('COMPASS_DRY_RUN') === 'true'
-  const allowRepair = getEnv('COMPASS_ALLOW_REPAIR') === 'true'
+  const prNumber = Number(getRequiredEnv('INPUT_PR_NUMBER'))
+  if (![owner, repo].every((part) => /^[A-Za-z0-9_.-]{1,100}$/.test(part) && part !== '.' && part !== '..') ||
+      !Number.isSafeInteger(prNumber) || prNumber < 1) {
+    throw new Error('Invalid repository owner/name or PR number.')
+  }
+  const dryRun = getBoolean('COMPASS_DRY_RUN', true)
+  const allowRepair = getBoolean('COMPASS_ALLOW_REPAIR')
+  const acceptLicense = getBoolean('COMPASS_ACCEPT_BOB_LICENSE')
   const bobPath = getEnv('BOB_PATH', 'bob')
   const limits = runtimeLimits({
     bobPath,
@@ -124,6 +137,8 @@ async function main(): Promise<void> {
   })
 
   const githubToken = process.env['GITHUB_TOKEN'] ?? ''
+  // Reject unsupported write setup before collection or any paid analysis.
+  const publishProvider = dryRun ? null : new OctokitPublishProvider(githubToken)
 
   console.log(`Compass: analyzing ${owner}/${repo}#${prNumber}`)
   if (dryRun) console.log('Compass: DRY RUN — no comments will be posted')
@@ -141,7 +156,7 @@ async function main(): Promise<void> {
     collection = result
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error(`Compass: collection failed — ${msg}`)
+    console.error(`Compass: collection failed — ${redactSecrets(msg)}`)
     process.exit(1)
   }
 
@@ -154,53 +169,51 @@ async function main(): Promise<void> {
     bobPath,
     ...limits,
     allowRepair,
-    acceptLicense: getEnv('COMPASS_ACCEPT_BOB_LICENSE') === 'true',
+    acceptLicense,
   }, bobProvider)
 
-  let commentBody: string
-
+  let brief: ContextBrief
   if (!analyzeResult.ok) {
     console.error(`Compass: analysis failed — ${analyzeResult.reason}`)
-    // Produce an unavailable brief so the comment is honest
-    const unavailable = makeUnavailableBriefFromCollection(collection, analyzeResult.reason)
-    commentBody = renderUnavailable(unavailable)
+    brief = makeUnavailableBriefFromCollection(collection, analyzeResult.reason)
   } else {
-    // Validate
     const report = validateBrief(analyzeResult.brief)
     if (!report.valid) {
-      const issues = report.findings.map((f) => `${f.field}: ${f.message}`).join('; ')
+      const issues = redactSecrets(report.findings.map((f) => `${f.field}: ${f.message}`).join('; '))
       console.error(`Compass: validation findings — ${issues}`)
-      const unavailable = makeUnavailableBriefFromCollection(
-        collection,
-        `Brief failed validation: ${issues}`,
-      )
-      commentBody = renderUnavailable(unavailable)
+      brief = makeUnavailableBriefFromCollection(collection, `Brief failed validation: ${issues}`)
     } else {
-      commentBody = render(analyzeResult.brief)
+      brief = analyzeResult.brief
     }
   }
 
-  // 5. Publish (or dry-run)
-  const publishProvider = new OctokitPublishProvider(githubToken)
-  const publishResult = await publish(publishProvider, {
-    owner,
-    repo,
-    prNumber,
-    body: commentBody,
-    analyzedHeadSha: collection.headSha,
-    dryRun,
-  })
+  const commentBody = render(brief)
+  const outputRoot = getEnv('COMPASS_OUTPUT_DIR',
+    path.join(process.env.GITHUB_WORKSPACE ?? process.cwd(), 'compass-output'))
+  const artifacts = await saveArtifacts(brief, commentBody, outputRoot)
+  console.log(`Compass: JSON saved to ${artifacts.jsonPath}`)
+  console.log(`Compass: Markdown saved to ${artifacts.markdownPath}`)
 
-  if (!publishResult.ok) {
-    console.error(`Compass: publish failed — ${publishResult.reason}`)
-    process.exit(1)
+  let outcome = 'dry-run (no GitHub writes)'
+  if (publishProvider) {
+    const result = await publish(publishProvider, {
+      owner, repo, prNumber, body: commentBody,
+      analyzedHeadSha: collection.headSha,
+      analyzedBaseSha: collection.baseSha,
+    })
+    if (!result.ok) {
+      console.error(`Compass: publish failed — ${redactSecrets(result.reason)}`)
+      process.exitCode = 1
+      return
+    }
+    outcome = result.action
   }
-
-  console.log(`Compass: ${publishResult.action} — done`)
+  console.log(`Compass: ${outcome}; context status: ${brief.status}`)
+  if (brief.status === 'unavailable') process.exitCode = 1
 }
 
 main().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err)
-  console.error(`Compass: fatal error — ${msg}`)
+  console.error(`Compass: fatal error — ${redactSecrets(msg)}`)
   process.exit(1)
 })

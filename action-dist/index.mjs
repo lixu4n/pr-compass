@@ -147,9 +147,12 @@ var LIMITS = {
   // lines of surrounding context per changed hunk
 };
 function shouldSkip(pr) {
-  const headRepo = pr.head.repo?.full_name ?? null;
+  if (pr.state !== "open") return { skip: true, reason: "PR is no longer open." };
+  if (pr.base.repo.private) return { skip: true, reason: "Private repositories are outside this public-demo MVP." };
+  if (!pr.head.repo) return { skip: true, reason: "Head repository is unavailable." };
+  const headRepo = pr.head.repo.full_name;
   const baseRepo = pr.base.repo.full_name;
-  const isFork = headRepo !== null && headRepo !== baseRepo;
+  const isFork = headRepo.toLowerCase() !== baseRepo.toLowerCase();
   if (isFork) return { skip: true, reason: "Fork PRs are not supported." };
   if (pr.draft) return { skip: true, reason: "Draft PRs are skipped." };
   const login = pr.user?.login ?? "";
@@ -5055,7 +5058,7 @@ function validateBrief(brief) {
 var COMPASS_MARKER = "<!-- compass:context-brief:v1 -->";
 var WORD_CAP = 220;
 function escapeMarkdown(text) {
-  return text.replace(/([\\`*_{}[\]()#+\-.!|])/g, "\\$1").replace(/@(\w)/g, "@\u200B$1").replace(/#(\d+)/g, "#\u200B$1");
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/([\\`*_{}[\]()#+\-.!|])/g, "\\$1").replace(/@(\w)/g, "@\u200B$1").replace(/#(\d+)/g, "#\u200B$1");
 }
 function sanitize(text) {
   return text.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ").replace(/\s+/g, " ").trim();
@@ -5149,7 +5152,7 @@ function renderUnavailable(brief) {
 >
 > ${reason}
 >
-> No earlier brief has been updated with unverified data.`;
+> No verified context is available for this snapshot. Human review is still required.`;
   return [COMPASS_MARKER, body, renderProvenance(brief)].join("\n\n");
 }
 function render(brief) {
@@ -5176,63 +5179,101 @@ function render(brief) {
 // tools/compass/publish.ts
 var MAX_COMMENT_PAGES = 10;
 var PER_PAGE = 100;
+function hasMarker(body) {
+  return body === COMPASS_MARKER || body.startsWith(`${COMPASS_MARKER}
+`);
+}
 async function findCompassComment(provider, owner, repo, prNumber, botLogin) {
+  let found = null;
   for (let page = 1; page <= MAX_COMMENT_PAGES; page++) {
     const comments = await provider.listComments(owner, repo, prNumber, page, PER_PAGE);
-    if (comments.length === 0) break;
     for (const comment of comments) {
-      if (comment.body.includes(COMPASS_MARKER) && comment.user?.login === botLogin) {
-        return comment;
+      if (hasMarker(comment.body) && comment.user?.login === botLogin) {
+        if (found && found.id !== comment.id) {
+          throw new Error("Multiple Compass comments found; resolve duplicates before publishing.");
+        }
+        found = comment;
       }
     }
-    if (comments.length < PER_PAGE) break;
+    if (comments.length < PER_PAGE) return found;
+  }
+  throw new Error("Comment discovery limit reached; refusing to create or update a possibly duplicate comment.");
+}
+function invalidState(state, options) {
+  const expectedRepository = `${options.owner}/${options.repo}`.toLowerCase();
+  if (state.state !== "open") return "PR is no longer open.";
+  if (state.draft) return "PR is a draft; skipping publication.";
+  if (state.isPrivate) return "Private repositories are outside this public-demo MVP.";
+  if (state.authorIsBot) return "Bot-authored PRs are skipped.";
+  if (!state.headRepository || state.baseRepository.toLowerCase() !== expectedRepository || state.headRepository.toLowerCase() !== expectedRepository) return "Fork, missing head repository, or mismatched PR target; skipping publication.";
+  if (state.headSha !== options.analyzedHeadSha) {
+    return "Stale analysis: PR head changed. No comment was written.";
+  }
+  if (options.analyzedBaseSha && state.baseSha !== options.analyzedBaseSha) {
+    return "Stale analysis: PR base changed. No comment was written.";
   }
   return null;
 }
+function safeError(error) {
+  return redactSecrets(error instanceof Error ? error.message : String(error));
+}
 async function publish(provider, options) {
-  const { owner, repo, prNumber, body, analyzedHeadSha, dryRun = false } = options;
-  if (dryRun) {
-    return { ok: true, action: "dry-run" };
+  const { owner, repo, prNumber, body, dryRun = false } = options;
+  if (!hasMarker(body) || body.length > 65e3) {
+    return { ok: false, reason: "Comment is missing its Compass marker or exceeds the size limit." };
   }
-  let currentHeadSha;
+  if (!/^[0-9a-f]{40}$/i.test(options.analyzedHeadSha) || options.analyzedBaseSha !== void 0 && !/^[0-9a-f]{40}$/i.test(options.analyzedBaseSha)) {
+    return { ok: false, reason: "Publication requires exact full commit SHAs." };
+  }
+  if (dryRun) return { ok: true, action: "dry-run" };
   try {
-    currentHeadSha = await provider.getPrHeadSha(owner, repo, prNumber);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, reason: `Could not verify PR head SHA before publishing: ${msg}` };
+    const before = await provider.getPublicationState(owner, repo, prNumber);
+    const reason = invalidState(before, options);
+    if (reason) return { ok: false, reason };
+  } catch (error) {
+    return { ok: false, reason: `Could not verify PR state: ${safeError(error)}` };
   }
-  if (currentHeadSha !== analyzedHeadSha) {
-    return {
-      ok: false,
-      reason: `Stale analysis: head SHA changed from ${analyzedHeadSha.slice(0, 7)} to ${currentHeadSha.slice(0, 7)} before publishing. Skipping.`
-    };
-  }
-  let botLogin;
+  let existing;
   try {
-    botLogin = await provider.getBotLogin();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, reason: `Could not determine bot login: ${msg}` };
-  }
-  let existingComment;
-  try {
-    existingComment = await findCompassComment(provider, owner, repo, prNumber, botLogin);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, reason: `Could not list PR comments: ${msg}` };
+    const botLogin = await provider.getBotLogin();
+    if (!botLogin) throw new Error("Expected publisher identity is unavailable.");
+    existing = await findCompassComment(provider, owner, repo, prNumber, botLogin);
+  } catch (error) {
+    return { ok: false, reason: `Could not identify the Compass comment: ${safeError(error)}` };
   }
   try {
-    if (existingComment) {
-      await provider.updateComment(owner, repo, existingComment.id, body);
+    const current = await provider.getPublicationState(owner, repo, prNumber);
+    const reason = invalidState(current, options);
+    if (reason) return { ok: false, reason };
+    if (existing) {
+      if (existing.body === body) return { ok: true, action: "unchanged" };
+      await provider.updateComment(owner, repo, existing.id, body);
       return { ok: true, action: "updated" };
-    } else {
-      await provider.createComment(owner, repo, prNumber, body);
-      return { ok: true, action: "created" };
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, reason: `GitHub API error during publish: ${msg}` };
+    await provider.createComment(owner, repo, prNumber, body);
+    return { ok: true, action: "created" };
+  } catch (error) {
+    return { ok: false, reason: `GitHub publication failed: ${safeError(error)}` };
   }
+}
+
+// tools/compass/artifacts.ts
+import { mkdir as mkdir2, mkdtemp as mkdtemp2, writeFile } from "node:fs/promises";
+import { join as join2, resolve as resolve2 } from "node:path";
+async function saveArtifacts(brief, markdown, outputRoot) {
+  const repository = brief.provenance.repository;
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || repository.split("/").some((part) => part === "." || part === ".." || part.length > 100) || !/^[0-9a-f]{40}$/i.test(brief.provenance.headCommitSha) || !Number.isSafeInteger(brief.provenance.prNumber) || brief.provenance.prNumber < 1) {
+    throw new Error("Invalid artifact provenance; refusing to construct output paths.");
+  }
+  const root = resolve2(outputRoot);
+  await mkdir2(root, { recursive: true, mode: 448 });
+  const prefix = `${repository.replace("/", "-")}-pr${brief.provenance.prNumber}-${brief.provenance.headCommitSha}-`;
+  const directory = await mkdtemp2(join2(root, prefix));
+  const jsonPath = join2(directory, "context-brief.json");
+  const markdownPath = join2(directory, "context-comment.md");
+  await writeFile(jsonPath, JSON.stringify(brief, null, 2) + "\n", { encoding: "utf8", mode: 384 });
+  await writeFile(markdownPath, markdown, { encoding: "utf8", mode: 384 });
+  return { directory, jsonPath, markdownPath };
 }
 
 // node_modules/universal-user-agent/index.js
@@ -8822,10 +8863,18 @@ var OctokitGitHubProvider = class {
     return data;
   }
 };
+var ACTIONS_BOT_LOGIN = "github-actions[bot]";
 var OctokitPublishProvider = class {
   octokit;
-  constructor(token) {
-    this.octokit = createOctokit(token);
+  constructor(token, client) {
+    if (!token.trim()) throw new Error("GitHub publication requires GITHUB_TOKEN.");
+    if (process.env.GITHUB_ACTIONS !== "true") {
+      throw new Error("Live publication is supported only in GitHub Actions; use dry-run locally.");
+    }
+    if (/^(ghp_|github_pat_)/.test(token)) {
+      throw new Error("Personal access tokens are not supported for publication; use the standard Actions GITHUB_TOKEN.");
+    }
+    this.octokit = client ?? createOctokit(token);
   }
   async listComments(owner, repo, prNumber, page, perPage) {
     const { data } = await this.octokit.issues.listComments({
@@ -8847,17 +8896,21 @@ var OctokitPublishProvider = class {
   async updateComment(owner, repo, commentId, body) {
     await this.octokit.issues.updateComment({ owner, repo, comment_id: commentId, body });
   }
-  async getPrHeadSha(owner, repo, prNumber) {
-    const pr = await this.getPullRequest(owner, repo, prNumber);
-    return pr.head.sha;
+  async getPublicationState(owner, repo, prNumber) {
+    const { data } = await this.octokit.pulls.get({ owner, repo, pull_number: prNumber });
+    return {
+      headSha: data.head.sha,
+      baseSha: data.base.sha,
+      state: data.state,
+      draft: data.draft ?? true,
+      baseRepository: data.base.repo.full_name,
+      headRepository: data.head.repo?.full_name ?? null,
+      isPrivate: data.base.repo.private,
+      authorIsBot: !data.user || data.user.type === "Bot" || data.user.login.endsWith("[bot]") || data.user.login === "dependabot"
+    };
   }
   async getBotLogin() {
-    const { data } = await this.octokit.users.getAuthenticated();
-    return data.login;
-  }
-  async getPullRequest(owner, repo, prNumber) {
-    const { data } = await this.octokit.pulls.get({ owner, repo, pull_number: prNumber });
-    return { ...data, draft: data.draft ?? true };
+    return ACTIONS_BOT_LOGIN;
   }
 };
 
@@ -8870,6 +8923,11 @@ function getRequiredEnv(name) {
 }
 function getEnv(name, fallback = "") {
   return process.env[name] ?? fallback;
+}
+function getBoolean(name, fallback = false) {
+  const value = getEnv(name, String(fallback));
+  if (value !== "true" && value !== "false") throw new Error(`${name} must be true or false.`);
+  return value === "true";
 }
 async function readTrustedInstructions() {
   const promptPath = path.join(__dirname, "prompts", "context.md");
@@ -8918,9 +8976,13 @@ async function main() {
   }
   const owner = getRequiredEnv("INPUT_OWNER");
   const repo = getRequiredEnv("INPUT_REPO");
-  const prNumber = parseInt(getRequiredEnv("INPUT_PR_NUMBER"), 10);
-  const dryRun = getEnv("COMPASS_DRY_RUN") === "true";
-  const allowRepair = getEnv("COMPASS_ALLOW_REPAIR") === "true";
+  const prNumber = Number(getRequiredEnv("INPUT_PR_NUMBER"));
+  if (![owner, repo].every((part) => /^[A-Za-z0-9_.-]{1,100}$/.test(part) && part !== "." && part !== "..") || !Number.isSafeInteger(prNumber) || prNumber < 1) {
+    throw new Error("Invalid repository owner/name or PR number.");
+  }
+  const dryRun = getBoolean("COMPASS_DRY_RUN", true);
+  const allowRepair = getBoolean("COMPASS_ALLOW_REPAIR");
+  const acceptLicense = getBoolean("COMPASS_ACCEPT_BOB_LICENSE");
   const bobPath = getEnv("BOB_PATH", "bob");
   const limits = runtimeLimits({
     bobPath,
@@ -8928,6 +8990,7 @@ async function main() {
     maxTurns: Number(getEnv("COMPASS_MAX_TURNS", "4"))
   });
   const githubToken = process.env["GITHUB_TOKEN"] ?? "";
+  const publishProvider = dryRun ? null : new OctokitPublishProvider(githubToken);
   console.log(`Compass: analyzing ${owner}/${repo}#${prNumber}`);
   if (dryRun) console.log("Compass: DRY RUN \u2014 no comments will be posted");
   const gitHubProvider = new OctokitGitHubProvider(githubToken);
@@ -8941,7 +9004,7 @@ async function main() {
     collection = result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Compass: collection failed \u2014 ${msg}`);
+    console.error(`Compass: collection failed \u2014 ${redactSecrets(msg)}`);
     process.exit(1);
   }
   const trustedInstructions = await readTrustedInstructions();
@@ -8950,44 +9013,52 @@ async function main() {
     bobPath,
     ...limits,
     allowRepair,
-    acceptLicense: getEnv("COMPASS_ACCEPT_BOB_LICENSE") === "true"
+    acceptLicense
   }, bobProvider);
-  let commentBody;
+  let brief;
   if (!analyzeResult.ok) {
     console.error(`Compass: analysis failed \u2014 ${analyzeResult.reason}`);
-    const unavailable = makeUnavailableBriefFromCollection(collection, analyzeResult.reason);
-    commentBody = renderUnavailable(unavailable);
+    brief = makeUnavailableBriefFromCollection(collection, analyzeResult.reason);
   } else {
     const report = validateBrief(analyzeResult.brief);
     if (!report.valid) {
-      const issues = report.findings.map((f) => `${f.field}: ${f.message}`).join("; ");
+      const issues = redactSecrets(report.findings.map((f) => `${f.field}: ${f.message}`).join("; "));
       console.error(`Compass: validation findings \u2014 ${issues}`);
-      const unavailable = makeUnavailableBriefFromCollection(
-        collection,
-        `Brief failed validation: ${issues}`
-      );
-      commentBody = renderUnavailable(unavailable);
+      brief = makeUnavailableBriefFromCollection(collection, `Brief failed validation: ${issues}`);
     } else {
-      commentBody = render(analyzeResult.brief);
+      brief = analyzeResult.brief;
     }
   }
-  const publishProvider = new OctokitPublishProvider(githubToken);
-  const publishResult = await publish(publishProvider, {
-    owner,
-    repo,
-    prNumber,
-    body: commentBody,
-    analyzedHeadSha: collection.headSha,
-    dryRun
-  });
-  if (!publishResult.ok) {
-    console.error(`Compass: publish failed \u2014 ${publishResult.reason}`);
-    process.exit(1);
+  const commentBody = render(brief);
+  const outputRoot = getEnv(
+    "COMPASS_OUTPUT_DIR",
+    path.join(process.env.GITHUB_WORKSPACE ?? process.cwd(), "compass-output")
+  );
+  const artifacts = await saveArtifacts(brief, commentBody, outputRoot);
+  console.log(`Compass: JSON saved to ${artifacts.jsonPath}`);
+  console.log(`Compass: Markdown saved to ${artifacts.markdownPath}`);
+  let outcome = "dry-run (no GitHub writes)";
+  if (publishProvider) {
+    const result = await publish(publishProvider, {
+      owner,
+      repo,
+      prNumber,
+      body: commentBody,
+      analyzedHeadSha: collection.headSha,
+      analyzedBaseSha: collection.baseSha
+    });
+    if (!result.ok) {
+      console.error(`Compass: publish failed \u2014 ${redactSecrets(result.reason)}`);
+      process.exitCode = 1;
+      return;
+    }
+    outcome = result.action;
   }
-  console.log(`Compass: ${publishResult.action} \u2014 done`);
+  console.log(`Compass: ${outcome}; context status: ${brief.status}`);
+  if (brief.status === "unavailable") process.exitCode = 1;
 }
 main().catch((err) => {
   const msg = err instanceof Error ? err.message : String(err);
-  console.error(`Compass: fatal error \u2014 ${msg}`);
+  console.error(`Compass: fatal error \u2014 ${redactSecrets(msg)}`);
   process.exit(1);
 });

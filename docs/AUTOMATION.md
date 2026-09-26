@@ -10,9 +10,13 @@ adapter now targets the user's verified **Bob Shell 2.0.5**, with mandatory tool
 restrictions, bounded resources and a minimal child environment. Its process tests
 use a harmless fake executable, not real Bob inference.
 
-**Do not enable live PR automation yet.** A real authenticated inference has not
-been demonstrated. GitHub publishing identity/freshness handling still needs its
-separate repair. Passing offline tests is not live-integration success.
+The publisher now supports the standard GitHub Actions identity, bounded comment
+discovery, ownership checks and a final PR-state check before writing. Packaged
+end-to-end tests exercise the real CLI with fake GitHub/Bob services.
+
+**Do not enable live PR automation yet.** A real authenticated inference and real
+comment publication still require separate, explicitly approved smoke tests.
+Passing offline tests is not live-integration success.
 
 The React app remains an optional legacy viewer. It does not invoke Bob and is not
 required to render the GitHub comment.
@@ -79,7 +83,7 @@ message. No API keys or Bob installation are needed.
 It does NOT check credentials, prove the brief is correct, verify Bob availability,
 or demonstrate a live GitHub workflow. Never describe this output as a real PR run.
 
-## Isolated package smoke tests
+## Isolated package and pipeline smoke tests
 
 ```bash
 npm run test:action
@@ -87,17 +91,25 @@ npm run test:action
 
 This rebuilds the distribution, then uses Node's test runner to copy it into a
 fresh temporary directory without `src/`, `tools/` or root `node_modules`.
-The executable is launched from an unrelated working directory with a minimal,
-credential-free environment. A preload guard rejects network calls and child
-process launches during the tests.
+The executable is launched from an unrelated working directory. Package checks
+have a minimal, credential-free environment and reject network/child-process use.
+Pipeline checks use clearly synthetic credentials, fake HTTP responses and a fake
+Bob executable; all unexpected network or subprocess operations are blocked.
 
-The five checks cover:
+The five packaging checks cover:
 1. Successful standalone package check.
 2. Clear failure when the prompt is missing.
 3. Clear failure when the prompt is empty.
 4. Missing normal-run configuration fails before network/model work.
 5. Unknown arguments cannot accidentally start a live run.
 
+Four additional packaged-pipeline checks verify:
+1. Default dry-run writes inspectable local JSON/Markdown without GitHub writes.
+2. Explicit publication uses the Actions identity without requesting `/user`.
+3. A PR change during comment discovery prevents stale publication.
+4. Failed analysis produces unavailable output and a failing job status.
+
+There are nine checks in `npm run test:action`. None uses a real API or account.
 Test folders are removed afterwards. These are offline execution checks, not a
 security sandbox for real agent runs.
 
@@ -192,13 +204,47 @@ preconditions, missing flags/version, timeout escalation, output/prompt caps,
 cleanup, redaction and repair-budget splitting. No real Bob executable or API is
 used. These tests need no real key and consume no Bobcoins.
 
+## Inspect output before authorizing publication
+
+Dry-run is now the default for the CLI and Action. A real analysis can still cost
+Bobcoins; dry-run only prevents comment writes. Use fake-service tests and
+`--check-package` for no-spend checks.
+
+Each processed PR produces a separate local run directory under `compass-output/`
+(or the trusted `COMPASS_OUTPUT_DIR` setting), containing:
+- `context-brief.json`: the assembled result, exact provenance and sources.
+- `context-comment.md`: the exact proposed comment.
+
+This folder is gitignored. Do not blindly commit generated source bundles. Files
+are created with restrictive permissions. Repeated runs on the same commit do not
+overwrite one another. Unavailable output is saved too, but yields exit status 1.
+The CLI prints artifact locations, not raw provider responses or credentials.
+
+To publish, set `dry_run: 'false'` explicitly inside a reviewed GitHub Actions
+workflow using the standard `secrets.GITHUB_TOKEN`. This MVP expects the built-in
+`github-actions[bot]` identity; it does not discover a user with `/user`. Local
+publication, PATs, custom App tokens and enterprise identities are unsupported.
+The `GITHUB_ACTIONS` environment check is a setup guardrail, not token attestation.
+Do not spoof it to bypass the supported workflow.
+
+The publisher matches a marker at the start of a comment AND the expected owner.
+It refuses ambiguous duplicate comments and exhausted discovery instead of adding
+another comment blindly. PR eligibility and both analyzed commits are rechecked
+after comment discovery. Closed/draft/private/fork/bot PRs are not written to.
+REST check-and-write is not atomic; retain per-PR workflow concurrency, and always
+show the analyzed SHA. A failed analysis can replace a prior bot-owned brief with
+an explicit unavailable state, never with an invented successful explanation.
+
 ## Before enabling PR-triggered execution
 
 - Complete an explicitly approved real adapter smoke test on a small synthetic
   input; verify account access, authentication, restrictions and actual usage.
-- Repair standard GITHUB_TOKEN identity handling and recheck freshness immediately
-  before comment writes.
-- Validate collection scope and context quality on exact source versions.
+- Confirm standard GITHUB_TOKEN permissions and create/update behavior in a
+  controlled, approved GitHub Actions run. Do not substitute a personal token.
+- Validate collection scope and context quality on exact source versions. The
+  current collector reads changed-file patches, truncated source and a fixed doc
+  list; unchanged-caller discovery and complete PR-file pagination remain limited.
+  Do not describe it as comprehensive repository understanding.
 - Use a trusted pinned Compass revision, not untrusted PR branch code.
 - Keep fork/draft/bot handling and least-privilege permissions explicit.
 - Do not use a privileged untrusted-code checkout as a workaround for missing secrets.
@@ -216,7 +262,7 @@ Use `--check-package` and offline tests for no-spend verification.
 | `npm run build` | Frontend production build, not Action packaging |
 | `npm run build:action` | ESM distribution and prompt generated |
 | `npm run check:package` | Offline executable/prompt availability |
-| `npm run test:action` | Five isolated packaging checks |
+| `npm run test:action` | Five packaging + four simulated end-to-end checks |
 | Real Bob-generated brief | Not established by packaging tests |
 | Live PR comment/update | Still pending approved integration test |
 | Automatic PR-triggered workflow | Not enabled by this change |

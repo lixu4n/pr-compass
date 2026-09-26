@@ -1,35 +1,14 @@
 /**
- * publish.ts — freshness-checked GitHub comment upsert.
- *
- * Design rules:
- * - Identifies the Compass comment by COMPASS_MARKER + bot identity check.
- * - Never edits comments not owned by the expected bot login.
- * - Checks head SHA freshness immediately before publishing; stale runs cannot
- *   replace a newer brief.
- * - On failure, updates an existing Compass comment to an explicit unavailable
- *   state rather than leaving an outdated brief looking current.
- * - Supports dry-run mode for testing without live API calls.
- * - Skips fork PRs, draft PRs, and absent credentials.
- * - All untrusted text (PR title, brief content) is already escaped by render.ts.
- *   No additional rendering happens here.
- * - The publishing token is kept out of the Bob process (enforced in analyze.ts).
- *
- * GitHub comment pagination is handled up to MAX_COMMENT_PAGES pages.
+ * Publish one bot-owned context comment for the exact analyzed PR snapshot.
+ * GitHub reads/writes are injected for offline tests. REST check-and-write is
+ * not atomic: use per-PR workflow concurrency as well as the final state check.
  */
-
 import { COMPASS_MARKER } from './render.js'
+import { redactSecrets } from './analyze.js'
 export { COMPASS_MARKER }
-
-// ---------------------------------------------------------------------------
-// Limits
-// ---------------------------------------------------------------------------
 
 const MAX_COMMENT_PAGES = 10
 const PER_PAGE = 100
-
-// ---------------------------------------------------------------------------
-// Provider interface for offline testing
-// ---------------------------------------------------------------------------
 
 export interface GitHubComment {
   id: number
@@ -37,49 +16,44 @@ export interface GitHubComment {
   user: { login: string } | null
 }
 
-export interface GitHubPublishProvider {
-  listComments(
-    owner: string,
-    repo: string,
-    prNumber: number,
-    page: number,
-    perPage: number,
-  ): Promise<GitHubComment[]>
-  createComment(owner: string, repo: string, prNumber: number, body: string): Promise<void>
-  updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void>
-  /** Returns the current head SHA for the PR — used for freshness check */
-  getPrHeadSha(owner: string, repo: string, prNumber: number): Promise<string>
-  /** Returns the bot's own login so we can verify comment ownership */
-  getBotLogin(): Promise<string>
+export interface PublicationState {
+  headSha: string
+  baseSha: string
+  state: string
+  draft: boolean
+  baseRepository: string
+  headRepository: string | null
+  isPrivate: boolean
+  authorIsBot: boolean
 }
 
-// ---------------------------------------------------------------------------
-// Publish options
-// ---------------------------------------------------------------------------
+export interface GitHubPublishProvider {
+  listComments(owner: string, repo: string, prNumber: number, page: number, perPage: number): Promise<GitHubComment[]>
+  createComment(owner: string, repo: string, prNumber: number, body: string): Promise<void>
+  updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void>
+  getPublicationState(owner: string, repo: string, prNumber: number): Promise<PublicationState>
+  /** Expected identity for the supported token type, not /user for an installation token. */
+  getBotLogin(): Promise<string>
+}
 
 export interface PublishOptions {
   owner: string
   repo: string
   prNumber: number
-  /** The fully-rendered Markdown comment body (already includes COMPASS_MARKER) */
   body: string
-  /** The head SHA at the time of analysis — used for the freshness check */
   analyzedHeadSha: string
-  /** If true, log what would happen but make no API calls */
+  analyzedBaseSha?: string
+  /** No publisher API calls. Upstream analysis can still cost Bobcoins. */
   dryRun?: boolean
 }
 
-// ---------------------------------------------------------------------------
-// Publish result
-// ---------------------------------------------------------------------------
-
 export type PublishResult =
-  | { ok: true; action: 'created' | 'updated' | 'dry-run' }
+  | { ok: true; action: 'created' | 'updated' | 'unchanged' | 'dry-run' }
   | { ok: false; reason: string }
 
-// ---------------------------------------------------------------------------
-// Find existing Compass comment
-// ---------------------------------------------------------------------------
+function hasMarker(body: string): boolean {
+  return body === COMPASS_MARKER || body.startsWith(`${COMPASS_MARKER}\n`)
+}
 
 export async function findCompassComment(
   provider: GitHubPublishProvider,
@@ -88,86 +62,91 @@ export async function findCompassComment(
   prNumber: number,
   botLogin: string,
 ): Promise<GitHubComment | null> {
+  let found: GitHubComment | null = null
   for (let page = 1; page <= MAX_COMMENT_PAGES; page++) {
     const comments = await provider.listComments(owner, repo, prNumber, page, PER_PAGE)
-    if (comments.length === 0) break
-
     for (const comment of comments) {
-      // Match BOTH the stable marker AND the expected bot owner
-      if (
-        comment.body.includes(COMPASS_MARKER) &&
-        comment.user?.login === botLogin
-      ) {
-        return comment
+      if (hasMarker(comment.body) && comment.user?.login === botLogin) {
+        if (found && found.id !== comment.id) {
+          throw new Error('Multiple Compass comments found; resolve duplicates before publishing.')
+        }
+        found = comment
       }
     }
+    if (comments.length < PER_PAGE) return found
+  }
+  // We have not proved there is no later existing comment; do not create a duplicate.
+  throw new Error('Comment discovery limit reached; refusing to create or update a possibly duplicate comment.')
+}
 
-    if (comments.length < PER_PAGE) break // last page
+function invalidState(state: PublicationState, options: PublishOptions): string | null {
+  const expectedRepository = `${options.owner}/${options.repo}`.toLowerCase()
+  if (state.state !== 'open') return 'PR is no longer open.'
+  if (state.draft) return 'PR is a draft; skipping publication.'
+  if (state.isPrivate) return 'Private repositories are outside this public-demo MVP.'
+  if (state.authorIsBot) return 'Bot-authored PRs are skipped.'
+  if (
+    !state.headRepository || state.baseRepository.toLowerCase() !== expectedRepository ||
+    state.headRepository.toLowerCase() !== expectedRepository
+  ) return 'Fork, missing head repository, or mismatched PR target; skipping publication.'
+  if (state.headSha !== options.analyzedHeadSha) {
+    return 'Stale analysis: PR head changed. No comment was written.'
+  }
+  if (options.analyzedBaseSha && state.baseSha !== options.analyzedBaseSha) {
+    return 'Stale analysis: PR base changed. No comment was written.'
   }
   return null
 }
 
-// ---------------------------------------------------------------------------
-// Main publish function
-// ---------------------------------------------------------------------------
+function safeError(error: unknown): string {
+  return redactSecrets(error instanceof Error ? error.message : String(error))
+}
 
 export async function publish(
   provider: GitHubPublishProvider,
   options: PublishOptions,
 ): Promise<PublishResult> {
-  const { owner, repo, prNumber, body, analyzedHeadSha, dryRun = false } = options
-
-  if (dryRun) {
-    return { ok: true, action: 'dry-run' }
+  const { owner, repo, prNumber, body, dryRun = false } = options
+  if (!hasMarker(body) || body.length > 65_000) {
+    return { ok: false, reason: 'Comment is missing its Compass marker or exceeds the size limit.' }
   }
+  if (!/^[0-9a-f]{40}$/i.test(options.analyzedHeadSha) ||
+      (options.analyzedBaseSha !== undefined && !/^[0-9a-f]{40}$/i.test(options.analyzedBaseSha))) {
+    return { ok: false, reason: 'Publication requires exact full commit SHAs.' }
+  }
+  if (dryRun) return { ok: true, action: 'dry-run' }
 
-  // 1. Freshness check — recheck the current head SHA before writing
-  let currentHeadSha: string
   try {
-    currentHeadSha = await provider.getPrHeadSha(owner, repo, prNumber)
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return { ok: false, reason: `Could not verify PR head SHA before publishing: ${msg}` }
+    const before = await provider.getPublicationState(owner, repo, prNumber)
+    const reason = invalidState(before, options)
+    if (reason) return { ok: false, reason }
+  } catch (error) {
+    return { ok: false, reason: `Could not verify PR state: ${safeError(error)}` }
   }
 
-  if (currentHeadSha !== analyzedHeadSha) {
-    return {
-      ok: false,
-      reason:
-        `Stale analysis: head SHA changed from ${analyzedHeadSha.slice(0, 7)} ` +
-        `to ${currentHeadSha.slice(0, 7)} before publishing. Skipping.`,
-    }
-  }
-
-  // 2. Find bot identity
-  let botLogin: string
+  let existing: GitHubComment | null
   try {
-    botLogin = await provider.getBotLogin()
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return { ok: false, reason: `Could not determine bot login: ${msg}` }
+    const botLogin = await provider.getBotLogin()
+    if (!botLogin) throw new Error('Expected publisher identity is unavailable.')
+    existing = await findCompassComment(provider, owner, repo, prNumber, botLogin)
+  } catch (error) {
+    return { ok: false, reason: `Could not identify the Compass comment: ${safeError(error)}` }
   }
 
-  // 3. Find existing Compass comment
-  let existingComment: GitHubComment | null
   try {
-    existingComment = await findCompassComment(provider, owner, repo, prNumber, botLogin)
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return { ok: false, reason: `Could not list PR comments: ${msg}` }
-  }
-
-  // 4. Create or update
-  try {
-    if (existingComment) {
-      await provider.updateComment(owner, repo, existingComment.id, body)
+    // Discovery can take multiple requests. Check again immediately before the
+    // write; never overwrite a current report with a known-stale snapshot.
+    const current = await provider.getPublicationState(owner, repo, prNumber)
+    const reason = invalidState(current, options)
+    if (reason) return { ok: false, reason }
+    if (existing) {
+      if (existing.body === body) return { ok: true, action: 'unchanged' }
+      await provider.updateComment(owner, repo, existing.id, body)
       return { ok: true, action: 'updated' }
-    } else {
-      await provider.createComment(owner, repo, prNumber, body)
-      return { ok: true, action: 'created' }
     }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return { ok: false, reason: `GitHub API error during publish: ${msg}` }
+    await provider.createComment(owner, repo, prNumber, body)
+    return { ok: true, action: 'created' }
+  } catch (error) {
+    return { ok: false, reason: `GitHub publication failed: ${safeError(error)}` }
   }
 }
