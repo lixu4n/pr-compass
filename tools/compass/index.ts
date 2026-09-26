@@ -2,7 +2,8 @@
  * index.ts — Compass CLI / orchestration entry point.
  *
  * Usage (after build):
- *   node action-dist/index.js
+ *   node action-dist/index.mjs --check-package  (offline; no credentials)
+ *   node action-dist/index.mjs                  (live path; not yet approved)
  *
  * Environment variables:
  *   GITHUB_TOKEN        — required for GitHub API calls (publish)
@@ -51,7 +52,16 @@ function getEnv(name: string, fallback = ''): string {
 async function readTrustedInstructions(): Promise<string> {
   // Always read from the Compass version, never from the target repo
   const promptPath = path.join(__dirname, 'prompts', 'context.md')
-  return fs.readFile(promptPath, 'utf8')
+  let instructions: string
+  try {
+    instructions = await fs.readFile(promptPath, 'utf8')
+  } catch {
+    throw new Error('Packaged Compass prompt is missing or unreadable. Run npm run build:action.')
+  }
+  if (instructions.trim().length === 0) {
+    throw new Error('Packaged Compass prompt is empty. Run npm run build:action.')
+  }
+  return instructions
 }
 
 function makeUnavailableBriefFromCollection(
@@ -84,6 +94,19 @@ function makeUnavailableBriefFromCollection(
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  // This explicit offline path runs before input/authentication checks or any
+  // client construction, collection, model invocation, or publication.
+  const args = process.argv.slice(2)
+  if (args.length === 1 && args[0] === '--check-package') {
+    await readTrustedInstructions()
+    console.log('Compass package check passed: bundled dependencies and trusted prompt are available.')
+    console.log('No GitHub or Bob calls were made. This does not verify live integration.')
+    return
+  }
+  if (args.length !== 0) {
+    throw new Error('Unknown arguments. Use --check-package for offline verification.')
+  }
+
   // 1. Read inputs
   const owner = getRequiredEnv('INPUT_OWNER')
   const repo = getRequiredEnv('INPUT_REPO')

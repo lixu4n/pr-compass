@@ -5,12 +5,11 @@
  * live GitHub API calls. All other modules depend on the provider interfaces,
  * enabling offline test injection.
  *
- * NOTE: @octokit/rest is not yet in package.json. Add it before running live:
- *   npm install @octokit/rest
- * It is intentionally omitted from devDependencies to keep the frontend
- * build unaffected. The Action build step will install it separately.
+ * Octokit is a declared automation dependency bundled into the Action.
+ * The React app does not import this module, so its bundle is unaffected.
  */
 
+import { Octokit } from '@octokit/rest'
 import type {
   GitHubProvider,
   PullRequest,
@@ -20,37 +19,8 @@ import type {
 } from './collect.js'
 import type { GitHubPublishProvider, GitHubComment } from './publish.js'
 
-// ---------------------------------------------------------------------------
-// Type-only Octokit shape (avoids requiring the package at typecheck time)
-// ---------------------------------------------------------------------------
-
-interface OctokitInstance {
-  pulls: {
-    get(params: { owner: string; repo: string; pull_number: number }): Promise<{ data: PullRequest }>
-    listFiles(params: { owner: string; repo: string; pull_number: number; per_page: number }): Promise<{ data: PrFile[] }>
-  }
-  repos: {
-    getContent(params: { owner: string; repo: string; path: string; ref: string }): Promise<{ data: RepoContent }>
-    compareCommitsWithBasehead(params: { owner: string; repo: string; basehead: string }): Promise<{ data: MergeBase }>
-  }
-  issues: {
-    listComments(params: {
-      owner: string; repo: string; issue_number: number;
-      page: number; per_page: number
-    }): Promise<{ data: GitHubComment[] }>
-    createComment(params: { owner: string; repo: string; issue_number: number; body: string }): Promise<void>
-    updateComment(params: { owner: string; repo: string; comment_id: number; body: string }): Promise<void>
-  }
-  users: {
-    getAuthenticated(): Promise<{ data: { login: string } }>
-  }
-}
-
-function createOctokit(token: string): OctokitInstance {
-  // Dynamic import at runtime so the frontend build never requires @octokit/rest
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { Octokit } = require('@octokit/rest')
-  return new Octokit({ auth: token }) as OctokitInstance
+function createOctokit(token: string): Octokit {
+  return new Octokit({ auth: token })
 }
 
 // ---------------------------------------------------------------------------
@@ -58,7 +28,7 @@ function createOctokit(token: string): OctokitInstance {
 // ---------------------------------------------------------------------------
 
 export class OctokitGitHubProvider implements GitHubProvider {
-  private octokit: OctokitInstance
+  private octokit: Octokit
 
   constructor(token: string) {
     this.octokit = createOctokit(token)
@@ -66,7 +36,8 @@ export class OctokitGitHubProvider implements GitHubProvider {
 
   async getPullRequest(owner: string, repo: string, prNumber: number): Promise<PullRequest> {
     const { data } = await this.octokit.pulls.get({ owner, repo, pull_number: prNumber })
-    return data
+    // The API type permits a missing draft flag; skip conservatively if unknown.
+    return { ...data, draft: data.draft ?? true }
   }
 
   async listPrFiles(owner: string, repo: string, prNumber: number): Promise<PrFile[]> {
@@ -79,6 +50,9 @@ export class OctokitGitHubProvider implements GitHubProvider {
   async getContent(owner: string, repo: string, filePath: string, ref: string): Promise<RepoContent | null> {
     try {
       const { data } = await this.octokit.repos.getContent({ owner, repo, path: filePath, ref })
+      // The real API may return a directory, symlink or submodule. Only regular
+      // files are usable by the existing collector.
+      if (Array.isArray(data) || data.type !== 'file') return null
       return data
     } catch {
       return null
@@ -98,7 +72,7 @@ export class OctokitGitHubProvider implements GitHubProvider {
 // ---------------------------------------------------------------------------
 
 export class OctokitPublishProvider implements GitHubPublishProvider {
-  private octokit: OctokitInstance
+  private octokit: Octokit
 
   constructor(token: string) {
     this.octokit = createOctokit(token)
@@ -108,7 +82,11 @@ export class OctokitPublishProvider implements GitHubPublishProvider {
     const { data } = await this.octokit.issues.listComments({
       owner, repo, issue_number: prNumber, page, per_page: perPage,
     })
-    return data
+    return data.map((comment) => ({
+      id: comment.id,
+      body: comment.body ?? '',
+      user: comment.user ? { login: comment.user.login } : null,
+    }))
   }
 
   async createComment(owner: string, repo: string, prNumber: number, body: string): Promise<void> {
@@ -131,6 +109,6 @@ export class OctokitPublishProvider implements GitHubPublishProvider {
 
   private async getPullRequest(owner: string, repo: string, prNumber: number): Promise<PullRequest> {
     const { data } = await this.octokit.pulls.get({ owner, repo, pull_number: prNumber })
-    return data
+    return { ...data, draft: data.draft ?? true }
   }
 }

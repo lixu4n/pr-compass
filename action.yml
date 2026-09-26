@@ -53,11 +53,10 @@ runs:
       with:
         node-version: '24'
 
-    - name: Install Compass dependencies
+    - name: Check Compass package (offline)
       shell: bash
       working-directory: ${{ github.action_path }}
-      run: |
-        npm install --prefix action-dist --omit=dev 2>&1 | tail -5
+      run: node action-dist/index.mjs --check-package
 
     - name: Run Compass
       shell: bash
@@ -72,4 +71,4 @@ runs:
         BOB_PATH: ${{ inputs.bob_path }}
         COMPASS_DRY_RUN: ${{ inputs.dry_run }}
         COMPASS_ALLOW_REPAIR: ${{ inputs.allow_repair }}
-      run: node action-dist/index.js
+      run: node action-dist/index.mjs

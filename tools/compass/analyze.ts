@@ -227,7 +227,7 @@ export function buildPrompt(
       ? ['### Omissions', collection.omissions.map((o) => `- ${o}`).join('\n'), '']
       : []),
     '## Instructions',
-    'Return ONLY a valid ModelOutputt JSON object with the exact fields specified above. Do not include sources, provenance, or schemaVersion. No prose before or after the JSON',
+    'Return ONLY a valid ModelOutput JSON object with the exact fields specified above. Do not include sources, provenance, or schemaVersion. No prose before or after the JSON',
     'Cite source IDs from the manifest above. Do not invent SHAs, timestamps, or URLs.',
   ].join('\n')
 }
