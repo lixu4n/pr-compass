@@ -133,6 +133,10 @@ describe('buildPrompt', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseEnvelope', () => {
+  it('rejects a null envelope without throwing', () => {
+       expect(() => parseEnvelope('null')).not.toThrow()
+       expect(parseEnvelope('null').ok).toBe(false)
+  })
   it('extracts last_message from a valid envelope', () => {
     const envelope = JSON.stringify({ status: 'success', last_message: '{"schemaVersion":1}' })
     const result = parseEnvelope(envelope)

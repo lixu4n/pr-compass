@@ -227,7 +227,7 @@ export function buildPrompt(
       ? ['### Omissions', collection.omissions.map((o) => `- ${o}`).join('\n'), '']
       : []),
     '## Instructions',
-    'Return ONLY a valid ContextBrief JSON object. No prose before or after the JSON.',
+    'Return ONLY a valid ModelOutputt JSON object with the exact fields specified above. Do not include sources, provenance, or schemaVersion. No prose before or after the JSON',
     'Cite source IDs from the manifest above. Do not invent SHAs, timestamps, or URLs.',
   ].join('\n')
 }
@@ -247,6 +247,18 @@ export function parseEnvelope(stdout: string): { ok: true; message: string } | {
     return {
       ok: false,
       reason: redactSecrets(`Bob output was not a valid JSON envelope: ${stdout.slice(0, 200)}`),
+    }
+  }
+
+  // Checks if the response if empty or null, if it is a number or a string and if it is a list instead of object.
+  if(
+    envelope === null ||
+    typeof envelope !== 'object' ||
+    Array.isArray(envelope)
+  ) {
+    return{
+      ok: false,
+      reason: 'Bob output must be a JSON object envelope'
     }
   }
 
