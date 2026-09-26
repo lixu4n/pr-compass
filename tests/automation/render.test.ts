@@ -147,6 +147,11 @@ describe('render — marker', () => {
 // ---------------------------------------------------------------------------
 
 describe('render — sections', () => {
+  it('brands normal and unavailable comments with Compass', ()=> {
+    for(const brief of [makeOkBrief(), makeUnavailableBrief()]){
+      expect(render(brief)).toContain('### Compass')
+    }
+  })
   it('contains Purpose section', () => {
     const output = render(makeOkBrief())
     expect(output).toContain('**Purpose**')

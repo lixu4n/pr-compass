@@ -19,6 +19,7 @@ import type { ContextBrief, SourceRecord } from '../../src/types/ContextBrief.js
 // ---------------------------------------------------------------------------
 
 export const COMPASS_MARKER = '<!-- compass:context-brief:v1 -->'
+export const COMPASS_HEADING = '### Compass'
 export const WORD_CAP = 220
 export const WORD_FLOOR = 150
 
@@ -209,7 +210,7 @@ export function renderUnavailable(brief: ContextBrief): string {
     `> ${reason}\n>\n` +
     `> No verified context is available for this snapshot. Human review is still required.`
 
-  return [COMPASS_MARKER, body, renderProvenance(brief)].join('\n\n')
+  return [COMPASS_MARKER, COMPASS_HEADING, body, renderProvenance(brief)].join('\n\n')
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +253,7 @@ export function render(brief: ContextBrief): string {
     finalMain = trimToWords(mainSections, WORD_CAP)
   }
 
-  const parts = [COMPASS_MARKER, finalMain, provenanceSection]
+  const parts = [COMPASS_MARKER, COMPASS_HEADING, finalMain, provenanceSection]
   if (limitationsSection) parts.push(limitationsSection)
 
   return parts.join('\n\n')
@@ -270,7 +271,7 @@ export interface WordCountResult {
 
 export function assertWordCount(output: string): WordCountResult {
   // Count only the main body — strip the marker, provenance line, and details block
-  const withoutMarker = output.replace(COMPASS_MARKER, '')
+  const withoutMarker = output.replace(COMPASS_MARKER, '').replace(COMPASS_HEADING, '')
   const withoutDetails = withoutMarker.replace(/<details>[\s\S]*?<\/details>/g, '')
   const withoutProvenance = withoutDetails.replace(/<sub>[\s\S]*?<\/sub>/g, '')
   const words = countWords(withoutProvenance)
