@@ -1,0 +1,261 @@
+{
+  "schemaVersion": 1,
+  "artifactKind": "actual",
+  "producedAt": "2026-09-26T02:23:57Z",
+  "pr": {
+    "title": "Add retry.backoffLimit option",
+    "url": "https://github.com/sindresorhus/ky/pull/454",
+    "number": 454,
+    "author": null,
+    "baseBranch": null,
+    "headBranch": null,
+    "baseCommitSha": "6d9f7c8",
+    "headCommitSha": "4d9bfe0"
+  },
+  "behavioralChanges": [
+    {
+      "id": "bc-1",
+      "summary": "Exponential backoff delay is now capped by a configurable backoffLimit option",
+      "before": "The retry delay was calculated as `0.3 * (2 ** (retryCount - 1)) * 1000` with no upper bound. For 6 retries the delay sequence was 300 → 600 → 1200 → 2400 → 4800 ms (total ~9300 ms).",
+      "after": "The retry delay is now `Math.min(backoffLimit, 0.3 * (2 ** (retryCount - 1)) * 1000)`. The default backoffLimit is `Number.POSITIVE_INFINITY`, so existing callers that do not set the option retain the original unbounded behaviour. When `backoffLimit` is set (e.g. 1000 ms) the delay sequence becomes 300 → 600 → 1000 → 1000 → 1000 ms.",
+      "evidenceKind": "fact",
+      "sources": [
+        {
+          "file": "source/core/Ky.ts",
+          "lines": "229",
+          "commitSha": "4d9bfe0",
+          "note": "Math.min wraps the original formula with this._options.retry.backoffLimit"
+        },
+        {
+          "file": "source/utils/normalize.ts",
+          "lines": "20",
+          "commitSha": "4d9bfe0",
+          "note": "Default value of backoffLimit is Number.POSITIVE_INFINITY, preserving original behaviour"
+        }
+      ]
+    },
+    {
+      "id": "bc-2",
+      "summary": "backoffLimit does NOT cap delays derived from Retry-After response headers",
+      "before": "Retry-After delays were already returned independently of the exponential backoff formula (early return at line 220).",
+      "after": "The early-return path for Retry-After headers (lines 207-220) is unchanged; Math.min(backoffLimit, ...) on line 229 is never reached when a Retry-After header is present. Only maxRetryAfter caps those delays, not backoffLimit.",
+      "evidenceKind": "fact",
+      "sources": [
+        {
+          "file": "source/core/Ky.ts",
+          "lines": "207-220",
+          "commitSha": "4d9bfe0",
+          "note": "Retry-After code path returns at line 220 before reaching the Math.min on line 229"
+        }
+      ]
+    },
+    {
+      "id": "bc-3",
+      "summary": "New optional field backoffLimit added to the public RetryOptions interface",
+      "before": "RetryOptions had five fields: limit, methods, statusCodes, afterStatusCodes, maxRetryAfter.",
+      "after": "RetryOptions has a sixth optional field `backoffLimit?: number`. Because the field is optional and the default is Infinity, existing TypeScript consumers require no changes.",
+      "evidenceKind": "fact",
+      "sources": [
+        {
+          "file": "source/types/retry.ts",
+          "lines": "37-47",
+          "commitSha": "4d9bfe0",
+          "note": "New backoffLimit field added to the exported RetryOptions interface"
+        },
+        {
+          "file": "source/index.ts",
+          "lines": "33",
+          "commitSha": "4d9bfe0",
+          "note": "RetryOptions is re-exported as part of the public package API"
+        }
+      ]
+    }
+  ],
+  "reviewLocations": [
+    {
+      "order": 1,
+      "label": "source/core/Ky.ts:229 — Math.min formula change",
+      "reason": "The single line that changes runtime behaviour for every retry. Verify that Math.min(Infinity, x) === x holds for the default case, and that negative or zero backoffLimit values are not silently accepted (they would zero out or negate all delays with no validation).",
+      "source": {
+        "file": "source/core/Ky.ts",
+        "lines": "228-229",
+        "commitSha": "4d9bfe0",
+        "note": "Core backoff calculation — the only changed runtime path"
+      }
+    },
+    {
+      "order": 2,
+      "label": "test/retry.ts:444-489 — 'respect maximum backoff' test",
+      "reason": "The test uses wall-clock timing with only 100ms tolerance for runs that total up to 9300 ms. The performance marks/measures are never cleared before the test runs, and the results are retrieved by positional index (.at(0), .at(1)) from the global performance buffer. If any earlier test adds a measure, or if this test is run more than once in the same process, the indices shift silently.",
+      "source": {
+        "file": "test/retry.ts",
+        "lines": "475-486",
+        "commitSha": "4d9bfe0",
+        "note": "performance.getEntriesByType('measure') without clearMeasures() and index-based result retrieval"
+      }
+    },
+    {
+      "order": 3,
+      "label": "source/types/retry.ts:37-47 — backoffLimit JSDoc",
+      "reason": "The JSDoc uses the term 'computedValue' without defining it, uses 'attemptCount' in the formula while the code variable is '_retryCount', and omits the standard @default tag that all other retry options carry. This creates inconsistency and potential user confusion.",
+      "source": {
+        "file": "source/types/retry.ts",
+        "lines": "37-47",
+        "commitSha": "4d9bfe0",
+        "note": "New JSDoc block for backoffLimit — undefined term, formula variable mismatch, missing @default"
+      }
+    },
+    {
+      "order": 4,
+      "label": "readme.md:164-193 — retry option documentation",
+      "reason": "The readme documents retry options in detail (limit, methods, statusCodes, maxRetryAfter) but makes no mention of the new backoffLimit field. Users reading the docs will be unaware the option exists.",
+      "source": {
+        "file": "readme.md",
+        "lines": "164-193",
+        "commitSha": "4d9bfe0",
+        "note": "Retry section in readme — backoffLimit absent from defaults list and prose description"
+      }
+    },
+    {
+      "order": 5,
+      "label": "source/utils/normalize.ts:39-43 — afterStatusCodes override anomaly",
+      "reason": "The existing normalizeRetryOptions hard-codes afterStatusCodes in the spread even though it comes from defaultRetryOptions. This pre-existing anomaly means a user who passes retry: { afterStatusCodes: [...] } cannot actually customise that field. Not introduced by this PR, but reviewers should be aware it is unchanged and limits composability with the new option.",
+      "source": {
+        "file": "source/utils/normalize.ts",
+        "lines": "39-43",
+        "commitSha": "4d9bfe0",
+        "note": "Pre-existing afterStatusCodes override that silently ignores user-supplied values — not changed by this PR"
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "id": "d-1",
+      "question": "Does the PR satisfy the intent of issue #389, which requested a `retry.calculateDelay` callback, not a numeric cap?",
+      "context": "Issue #389 requested a custom callback (similar to got's calculateDelay) enabling full control over delay logic including jitter. The maintainer explicitly endorsed `retry.calculateDelay`. This PR delivers `retry.backoffLimit` — a numeric upper bound — which is a narrower feature that caps the built-in exponential formula but does not allow custom algorithms or jitter.",
+      "stakes": "If the maintainer accepts backoffLimit as sufficient, it closes #389 as a partial solution and forecloses calculateDelay unless a separate PR is opened. If the maintainer requires calculateDelay, this PR needs to be redesigned or supplemented.",
+      "evidenceKind": "fact",
+      "sources": [
+        {
+          "file": "pr-compass-context/issue-389.md",
+          "lines": "6-16",
+          "commitSha": null,
+          "note": "Issue text and maintainer reply both describe calculateDelay, not backoffLimit"
+        }
+      ]
+    },
+    {
+      "id": "d-2",
+      "question": "Should backoffLimit=0 or negative values be rejected, or is silent 0-delay behaviour acceptable?",
+      "context": "With backoffLimit=0, Math.min(0, positiveValue) returns 0, giving zero delay on all retries. With a negative value, Math.min(negative, positive) returns negative, which setTimeout treats as 0. Neither value is validated or documented. This could cause accidental hammering of a server.",
+      "stakes": "Without validation, a misconfigured backoffLimit can silently disable all retry delays. Adding validation (throw if backoffLimit < 0) would be a minor change but would make the API safer and self-documenting.",
+      "evidenceKind": "inference",
+      "sources": [
+        {
+          "file": "source/core/Ky.ts",
+          "lines": "229",
+          "commitSha": "4d9bfe0",
+          "note": "Math.min with no guard on backoffLimit value"
+        },
+        {
+          "file": "source/utils/normalize.ts",
+          "lines": "23-43",
+          "commitSha": "4d9bfe0",
+          "note": "normalizeRetryOptions has no validation for backoffLimit"
+        }
+      ]
+    },
+    {
+      "id": "d-3",
+      "question": "Is the test's 100ms timing tolerance sufficient for CI environments?",
+      "context": "The new test measures total wall-clock elapsed time for 5 retry delays (9300 ms baseline) with ±100ms tolerance (~1% margin). Network round-trips to a local test server add latency on top of the sleep delays. On loaded CI runners or resource-constrained machines, scheduling jitter alone can exceed 100ms.",
+      "stakes": "If tolerance is too tight the test will produce intermittent failures ('flaky') in CI, which erodes confidence in the test suite.",
+      "evidenceKind": "inference",
+      "sources": [
+        {
+          "file": "test/retry.ts",
+          "lines": "481-482",
+          "commitSha": "4d9bfe0",
+          "note": "t.true(Math.abs(duration - expectedDuration) < 100, ...) — 100ms absolute tolerance"
+        }
+      ]
+    },
+    {
+      "id": "d-4",
+      "question": "Should performance marks and measures be cleared at the start of the test to prevent index-based retrieval from silently accessing the wrong measurement?",
+      "context": "The test calls performance.getEntriesByType('measure') without first calling performance.clearMeasures(). It then retrieves results by index (.at(0), .at(1)). If any previously-executed test (or a second run of this test in the same process) added performance measures, the indices would shift and the assertions would test the wrong durations without failing obviously.",
+      "stakes": "Silently wrong timing comparisons would let a broken backoffLimit implementation pass, or cause spurious failures on valid code. The fix is one call to performance.clearMeasures() and performance.clearMarks() at the top of the test.",
+      "evidenceKind": "fact",
+      "sources": [
+        {
+          "file": "test/retry.ts",
+          "lines": "475-486",
+          "commitSha": "4d9bfe0",
+          "note": "getEntriesByType without clearMeasures and index-based access"
+        }
+      ]
+    },
+    {
+      "id": "d-5",
+      "question": "Does backoffLimit intentionally not cap delays produced by Retry-After response headers, and should this asymmetry be documented?",
+      "context": "backoffLimit only applies to the computed exponential delay (line 229). When a server sends a Retry-After header and the status is in afterStatusCodes, the header value is returned directly at line 220 — bypassing the Math.min cap entirely. This asymmetry is not documented in the JSDoc or readme.",
+      "stakes": "Users who set backoffLimit expecting to cap all retry delays may be surprised when a server-directed Retry-After causes a much longer wait. The design may be intentional (server-directed delays should be respected), but it needs documentation.",
+      "evidenceKind": "fact",
+      "sources": [
+        {
+          "file": "source/core/Ky.ts",
+          "lines": "207-220",
+          "commitSha": "4d9bfe0",
+          "note": "Retry-After early return at line 220 bypasses the Math.min(backoffLimit, ...) on line 229"
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "Unit tests (npm test / ava)",
+      "status": "not-run",
+      "detail": null,
+      "notRunReason": "Read-only analysis; no test execution was performed per task rules"
+    },
+    {
+      "name": "TypeScript type check (tsc --noEmit)",
+      "status": "not-run",
+      "detail": null,
+      "notRunReason": "Read-only analysis; no build or compile commands were run"
+    },
+    {
+      "name": "Lint (xo / eslint)",
+      "status": "not-run",
+      "detail": null,
+      "notRunReason": "Read-only analysis; no lint commands were run"
+    },
+    {
+      "name": "Backward compatibility — default backoffLimit=Infinity preserves existing delay sequence",
+      "status": "not-run",
+      "detail": null,
+      "notRunReason": "Verified by code reading (Math.min(Infinity, x) === x) but not by running the test suite"
+    },
+    {
+      "name": "Edge case: backoffLimit=0 produces zero delays",
+      "status": "not-run",
+      "detail": null,
+      "notRunReason": "No test for this case; verified by reading the Math.min formula but not executed"
+    },
+    {
+      "name": "Edge case: negative backoffLimit silently yields 0ms via setTimeout",
+      "status": "not-run",
+      "detail": null,
+      "notRunReason": "No test for this case; behaviour inferred from Math.min semantics and setTimeout spec"
+    }
+  ],
+  "limitations": [
+    "PR author is unknown — the GitHub username was not available in the provided context.",
+    "Base and head branch names are unknown — only the commit SHAs were provided.",
+    "The full commit SHAs are abbreviated (7 characters); full 40-character SHAs could not be confirmed without running git commands.",
+    "No test execution was performed. All behavioral claims are derived from reading source code and the diff.",
+    "The interaction between backoffLimit and the _retry method's additional Math.min(ms, maxSafeTimeout) clamp (line 248) was observed but not tested: with backoffLimit=Infinity the outer clamp is the effective cap; with a finite backoffLimit the inner cap governs. This is expected-correct but not confirmed by running tests.",
+    "The readme.md line 171 documents maxRetryAfter default as 'undefined', but the code default is Number.POSITIVE_INFINITY (normalize.ts:19). This inconsistency is pre-existing and unrelated to this PR, but was observed during the review.",
+    "calculateDelay (the feature actually requested in issue #389) does not exist anywhere in the codebase. Whether the maintainer will accept backoffLimit as a substitute or require calculateDelay is a human decision that cannot be determined by code analysis alone."
+  ]
+}
