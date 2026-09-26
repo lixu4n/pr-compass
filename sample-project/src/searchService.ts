@@ -34,8 +34,7 @@ export function search(query: string): SearchResponse {
       ? []
       : DOCUMENTS.filter(
           (doc) =>
-            doc.title.toLowerCase().includes(q) ||
-            doc.snippet.toLowerCase().includes(q),
+            doc.title.toLowerCase().includes(q)
         )
 
   return {
