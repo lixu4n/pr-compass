@@ -1,0 +1,62 @@
+# Compass context brief on every PR
+#
+# This is an EXAMPLE consumer workflow. Replace the placeholder release
+# reference (compass-action@PLACEHOLDER) with a real tag or commit SHA
+# once the Compass Action has been released and reviewed.
+#
+# Supported triggers: opened, synchronize, reopened, ready_for_review
+# (title/body edits are not included by default; add "edited" if needed)
+#
+# Permissions required:
+#   contents: read    — to read repository files
+#   pull-requests: write — to post the context comment
+#
+# Prerequisites:
+#   1. Bob Shell API key stored as a repository secret named COMPASS_BOB_API_KEY.
+#      Create an Inference-scope key at https://bob.ibm.com and add it as a secret.
+#      Never hard-code it in the workflow file.
+#   2. Bob Shell (bobshell) must be installed in the runner. See docs/AUTOMATION.md.
+#
+# Trust boundary:
+#   - This workflow uses pull_request (not pull_request_target) to prevent
+#     untrusted fork code from accessing secrets.
+#   - Do not replace 'pull_request' with 'pull_request_target' without careful review.
+#   - The Compass revision must be a trusted, reviewed release tag or commit SHA.
+#     Do not use 'uses: ./' after checking out an untrusted PR head.
+
+name: Compass — PR Context Brief
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Cancel in-flight runs for the same PR when a new commit is pushed
+concurrency:
+  group: compass-${{ github.repository }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  compass:
+    name: Generate context brief
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Compass — PR Context Brief
+        # PLACEHOLDER: replace with a real released tag or full commit SHA before use.
+        # Example: uses: lixu4n/pr-compass@v1.0.0
+        # Example: uses: lixu4n/pr-compass@abc1234def5678
+        # Do NOT use a floating branch reference in production.
+        uses: lixu4n/pr-compass@PLACEHOLDER
+        with:
+          owner: ${{ github.repository_owner }}
+          repo: ${{ github.event.repository.name }}
+          pr_number: ${{ github.event.pull_request.number }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          bob_api_key: ${{ secrets.COMPASS_BOB_API_KEY }}
+          dry_run: 'false'
+          allow_repair: 'false'

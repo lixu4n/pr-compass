@@ -1,0 +1,10 @@
+{
+  "name": "compass-action",
+  "version": "0.1.0",
+  "description": "Compass GitHub Action — bundled entry point",
+  "type": "commonjs",
+  "main": "index.js",
+  "dependencies": {
+    "@octokit/rest": "^21.0.0"
+  }
+}
