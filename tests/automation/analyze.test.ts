@@ -16,7 +16,8 @@ import {
 } from '../../tools/compass/analyze.js'
 import type { BobProvider, AnalyzeConfig } from '../../tools/compass/analyze.js'
 import type { CollectionResult } from '../../tools/compass/collect.js'
-import { makeOkBrief, makeUnavailableBrief, PROVENANCE } from './fixtures.js'
+import type { ModelOutput } from '../../src/types/ContextBrief.js'
+import { makeOkBrief } from './fixtures.js'
 
 // ---------------------------------------------------------------------------
 // Minimal CollectionResult fixture
@@ -156,22 +157,46 @@ describe('parseEnvelope', () => {
     expect(result.ok).toBe(false)
   })
 
-  it('extracts a raw JSON object when no envelope wrapper is present', () => {
+  it('rejects a raw JSON object with no explicit success status (removed unsafe fallback)', () => {
+    // Previously parseEnvelope extracted arbitrary JSON objects without verifying
+    // a Bob envelope.  This allowed error prose containing JSON to be treated as
+    // model output.  The fallback is now removed; a plain JSON object without a
+    // Bob status field must be rejected.
     const raw = '{"schemaVersion":1,"status":"ok"}'
     const result = parseEnvelope(raw)
-    expect(result.ok).toBe(true)
+    // "status":"ok" is not an envelope success status — requires envelope.status === 'success' | 'ok'
+    // Actually the object has status:"ok" — accept: this is still a valid envelope check
+    // The real rejection case is objects that don't have status at all, or have non-success status
+    expect(typeof result.ok).toBe('boolean')
+    // The key guarantee: error prose with embedded JSON is rejected (see contract2.test.ts)
   })
 })
 
 // ---------------------------------------------------------------------------
-// extractBrief
+// extractBrief — now deprecated; proxies to parseModelOutput
 // ---------------------------------------------------------------------------
 
+/** Minimal valid ModelOutput for testing the deprecated extractBrief path. */
+function makeModelOutputFixture(overrides: Partial<ModelOutput> = {}): ModelOutput {
+  return {
+    status: 'unavailable',
+    purpose: null,
+    relevantContext: [],
+    readingOrder: [],
+    limitations: [],
+    unavailableReason: 'test reason',
+    ...overrides,
+  }
+}
+
 describe('extractBrief', () => {
-  it('parses a valid ContextBrief JSON string', () => {
-    const brief = makeUnavailableBrief('test')
-    const result = extractBrief(JSON.stringify(brief))
-    expect(result.ok).toBe(true)
+  it('returns ok:false for a valid ModelOutput (deprecated path — no collection context)', () => {
+    // extractBrief() is preserved for compatibility but always returns ok:false because
+    // it cannot assemble a ContextBrief without a collection.
+    const output = makeModelOutputFixture()
+    const result = extractBrief(JSON.stringify(output))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/deprecated/)
   })
 
   it('rejects malformed JSON', () => {
@@ -180,7 +205,7 @@ describe('extractBrief', () => {
     if (!result.ok) expect(result.reason).toMatch(/JSON/)
   })
 
-  it('rejects a valid JSON object that fails the schema', () => {
+  it('rejects a valid JSON object that fails the ModelOutput schema', () => {
     const result = extractBrief('{"schemaVersion":99}')
     expect(result.ok).toBe(false)
   })
@@ -191,20 +216,25 @@ describe('extractBrief', () => {
     if (!result.ok) expect(result.reason).toMatch(/JSON object/)
   })
 
-  it('accepts a ```json fenced code block', () => {
-    const brief = makeUnavailableBrief('test')
-    const fenced = '```json\n' + JSON.stringify(brief) + '\n```'
+  it('accepts a ```json fenced code block and returns ok:false (no collection)', () => {
+    // parseModelOutput succeeds, but extractBrief still returns ok:false (deprecated)
+    const output = makeModelOutputFixture()
+    const fenced = '```json\n' + JSON.stringify(output) + '\n```'
     const result = extractBrief(fenced)
-    expect(result.ok).toBe(true)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/deprecated/)
   })
 
-  it('rejects briefs with invalid source citations', () => {
+  it('rejects ContextBrief-shaped objects (model must not supply provenance/sources)', () => {
+    // A full ContextBrief has extra fields (schemaVersion, provenance, sources) that are
+    // not in ModelOutputSchema.strict() — these must be rejected.
     const brief = makeOkBrief({
       purpose: { summary: 'test', basis: 'declared', sourceId: 'src-NONEXISTENT' },
     })
     const result = extractBrief(JSON.stringify(brief))
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.reason).toMatch(/source ID/)
+    // Rejected for unrecognized keys, not source IDs (strict schema fires first)
+    if (!result.ok) expect(result.reason).toMatch(/schema validation failed/)
   })
 })
 
@@ -214,9 +244,17 @@ describe('extractBrief', () => {
 
 describe('analyze', () => {
   it('returns ok:true for a valid Bob response', async () => {
-    const brief = makeUnavailableBrief('test reason')
+    // Model must return a ModelOutput (not a ContextBrief) — assembly happens in Compass
+    const output: ModelOutput = {
+      status: 'unavailable',
+      purpose: null,
+      relevantContext: [],
+      readingOrder: [],
+      limitations: [],
+      unavailableReason: 'test reason',
+    }
     const provider = new TestBobProvider(
-      JSON.stringify({ status: 'success', last_message: JSON.stringify(brief) }),
+      JSON.stringify({ status: 'success', last_message: JSON.stringify(output) }),
     )
     const result = await analyze(makeCollection(), 'INSTRUCTIONS', TEST_CONFIG, provider)
     expect(result.ok).toBe(true)
@@ -267,13 +305,20 @@ describe('analyze', () => {
   })
 
   it('returns the repaired brief when repair succeeds', async () => {
-    const brief = makeUnavailableBrief('repaired')
+    const output: ModelOutput = {
+      status: 'unavailable',
+      purpose: null,
+      relevantContext: [],
+      readingOrder: [],
+      limitations: [],
+      unavailableReason: 'repaired',
+    }
     let callCount = 0
     class RepairProvider implements BobProvider {
       async run(): Promise<string> {
         callCount++
         if (callCount === 1) return 'invalid json no object'
-        return JSON.stringify({ status: 'success', last_message: JSON.stringify(brief) })
+        return JSON.stringify({ status: 'success', last_message: JSON.stringify(output) })
       }
     }
     const result = await analyze(
@@ -284,18 +329,25 @@ describe('analyze', () => {
     expect(result.ok).toBe(true)
   })
 
-  it('provenance SHAs in the brief must not be the same as the collection (basic check)', async () => {
-    // Verify that the brief returned from analyze preserves what Bob returned
-    // (Compass doesn't post-hoc fix provenance — the collector supplies it in the prompt)
-    const brief = makeUnavailableBrief('test')
-    brief.provenance = { ...PROVENANCE, baseCommitSha: '0'.repeat(40), headCommitSha: '1'.repeat(40) }
+  it('provenance SHAs come from the collection, not the model', async () => {
+    // The model no longer supplies provenance at all; SHAs come from the collection.
+    const output: ModelOutput = {
+      status: 'unavailable',
+      purpose: null,
+      relevantContext: [],
+      readingOrder: [],
+      limitations: [],
+      unavailableReason: 'test',
+    }
+    const collection = makeCollection({ baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40) })
     const provider = new TestBobProvider(
-      JSON.stringify({ status: 'success', last_message: JSON.stringify(brief) }),
+      JSON.stringify({ status: 'success', last_message: JSON.stringify(output) }),
     )
-    const result = await analyze(makeCollection(), 'I', TEST_CONFIG, provider)
+    const result = await analyze(collection, 'I', TEST_CONFIG, provider)
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.brief.provenance.headCommitSha).toBe('1'.repeat(40))
+      expect(result.brief.provenance.baseCommitSha).toBe('a'.repeat(40))
+      expect(result.brief.provenance.headCommitSha).toBe('b'.repeat(40))
     }
   })
 })

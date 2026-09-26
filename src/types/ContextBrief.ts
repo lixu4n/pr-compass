@@ -184,8 +184,43 @@ export const ContextBriefSchema = z.object({
 export type ContextBrief = z.infer<typeof ContextBriefSchema>
 
 // ---------------------------------------------------------------------------
-// Citation manifest — used internally to validate that all model-cited
-// source IDs resolve to records in the sources array
+// ModelOutput — the strict schema for what the model is allowed to return.
+//
+// The model MUST NOT supply sources, provenance, repository identity, commit
+// SHAs, URLs, timestamps, or Compass version. Those fields are assembled from
+// trusted application data (the collector result).  This schema is used by
+// extractBrief() to parse and validate the model response before assembly.
+// ---------------------------------------------------------------------------
+
+export const ModelOutputSchema = z.object({
+  /**
+   * 'ok' | 'partial' | 'unavailable' — model's self-assessed coverage.
+   * Application code may downgrade this (e.g. if content is missing).
+   */
+  status: BriefStatusSchema,
+
+  /** What the author intends — only source IDs from the manifest. */
+  purpose: z.union([PurposeSchema, z.null()]),
+
+  /** Up to 3 relevant-context statements citing manifest IDs. */
+  relevantContext: z.array(RelevantContextSchema).max(3),
+
+  /** Up to 3 ordered reading locations citing manifest IDs. */
+  readingOrder: z.array(ReadingLocationSchema).max(3),
+
+  /** Human-readable coverage limitations. */
+  limitations: z.array(z.string()),
+
+  /** Required when status is 'unavailable' or 'partial'; otherwise null. */
+  unavailableReason: z.union([z.string(), z.null()]),
+})
+  // Reject any extra keys the model may invent (sources, provenance, schemaVersion, …)
+  .strict()
+
+export type ModelOutput = z.infer<typeof ModelOutputSchema>
+
+// ---------------------------------------------------------------------------
+// Citation manifest — validate model-cited IDs against a collector manifest
 // ---------------------------------------------------------------------------
 
 export function collectCitedIds(brief: ContextBrief): string[] {
@@ -196,9 +231,25 @@ export function collectCitedIds(brief: ContextBrief): string[] {
   return ids
 }
 
+/** Validate citations in a ContextBrief against its own sources array. */
 export function validateCitations(brief: ContextBrief): string[] {
   const manifest = new Set(brief.sources.map((s) => s.id))
   const cited = collectCitedIds(brief)
   const invalid = cited.filter((id) => !manifest.has(id))
   return invalid // empty = all citations valid
+}
+
+/**
+ * Validate model-output citations against the collector manifest.
+ * Called during assembly, before the final ContextBrief is produced.
+ */
+export function validateModelCitations(
+  output: ModelOutput,
+  collectorSourceIds: Set<string>,
+): string[] {
+  const cited: string[] = []
+  if (output.purpose?.sourceId) cited.push(output.purpose.sourceId)
+  for (const ctx of output.relevantContext) cited.push(...ctx.sourceIds)
+  for (const loc of output.readingOrder) cited.push(loc.sourceId)
+  return cited.filter((id) => !collectorSourceIds.has(id))
 }

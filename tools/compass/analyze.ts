@@ -32,9 +32,8 @@ import { spawn } from 'node:child_process'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { ContextBriefSchema } from '../../src/types/ContextBrief.js'
-import { validateCitations } from '../../src/types/ContextBrief.js'
-import type { ContextBrief } from '../../src/types/ContextBrief.js'
+import { ModelOutputSchema, validateModelCitations } from '../../src/types/ContextBrief.js'
+import type { ContextBrief, ModelOutput } from '../../src/types/ContextBrief.js'
 import type { CollectionResult } from './collect.js'
 
 // ---------------------------------------------------------------------------
@@ -77,6 +76,74 @@ interface BobEnvelope {
 export type AnalyzeResult =
   | { ok: true; brief: ContextBrief }
   | { ok: false; reason: string }
+
+/**
+ * Assembles a ContextBrief from validated model output and trusted collection data.
+ * The model output must NOT contain sources, provenance, timestamps, or SHAs —
+ * those are taken exclusively from the collection.
+ *
+ * Returns ok:false if model-cited source IDs are not in the collector manifest,
+ * or if status is 'ok' but the model returned no meaningful content.
+ */
+export function assembleBrief(
+  output: ModelOutput,
+  collection: import('./collect.js').CollectionResult,
+  compassVersion: string,
+): AnalyzeResult {
+  const collectorSourceIds = new Set(collection.sources.map((s) => s.id))
+
+  // Validate that all cited IDs exist in the collector manifest
+  const invalidIds = validateModelCitations(output, collectorSourceIds)
+  if (invalidIds.length > 0) {
+    return {
+      ok: false,
+      reason: `Model cited unknown source IDs: ${invalidIds.join(', ')}`,
+    }
+  }
+
+  // Determine effective status: downgrade 'ok' to 'partial' or 'unavailable'
+  // when the model provided no meaningful content.
+  let { status } = output
+  if (status === 'ok') {
+    const hasMeaningfulContent =
+      output.purpose !== null &&
+      output.purpose.summary.trim().length > 0 &&
+      output.readingOrder.length > 0
+    if (!hasMeaningfulContent) {
+      return {
+        ok: false,
+        reason: 'Model returned status "ok" but provided no purpose or reading locations.',
+      }
+    }
+  }
+
+  const brief: ContextBrief = {
+    schemaVersion: 1,
+    status,
+    provenance: {
+      repository: collection.repository,
+      prNumber: collection.prNumber,
+      prTitle: collection.prTitle,
+      baseCommitSha: collection.baseSha,
+      headCommitSha: collection.headSha,
+      generatedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      compassVersion,
+    },
+    purpose: output.purpose,
+    relevantContext: output.relevantContext,
+    readingOrder: output.readingOrder,
+    // Sources come exclusively from the collection — never from the model
+    sources: collection.sources,
+    // Collector omissions are preserved and merged with model-reported limitations
+    limitations: [
+      ...collection.omissions,
+      ...output.limitations,
+    ],
+    unavailableReason: output.unavailableReason,
+  }
+
+  return { ok: true, brief }
+}
 
 // ---------------------------------------------------------------------------
 // Provider interface for offline testing
@@ -170,45 +237,48 @@ export function buildPrompt(
 // ---------------------------------------------------------------------------
 
 export function parseEnvelope(stdout: string): { ok: true; message: string } | { ok: false; reason: string } {
+  // Require a valid Bob JSON envelope.  Do NOT extract arbitrary JSON substrings
+  // from prose — that would allow error messages containing JSON snippets to be
+  // treated as successful model output.
   let envelope: BobEnvelope
   try {
-    envelope = JSON.parse(stdout) as BobEnvelope
+    envelope = JSON.parse(stdout.trim()) as BobEnvelope
   } catch {
-    // Bob may output the message directly without an envelope (non-json mode)
-    // Attempt to extract a JSON object from the raw output
-    const jsonMatch = stdout.match(/\{[\s\S]*\}/)
-    if (jsonMatch) {
-      return { ok: true, message: jsonMatch[0] }
+    return {
+      ok: false,
+      reason: redactSecrets(`Bob output was not a valid JSON envelope: ${stdout.slice(0, 200)}`),
     }
-    return { ok: false, reason: redactSecrets(`Bob output was not parseable JSON: ${stdout.slice(0, 200)}`) }
   }
 
-  if (envelope.status && envelope.status !== 'success' && envelope.status !== 'ok') {
-    return { ok: false, reason: `Bob session ended with status: ${envelope.status}` }
+  // Require an explicit success status
+  if (!envelope.status || (envelope.status !== 'success' && envelope.status !== 'ok')) {
+    return {
+      ok: false,
+      reason: `Bob session ended with status: ${envelope.status ?? '(none)'}`,
+    }
   }
 
+  // last_message must be present and non-empty
   const message = envelope.last_message
-  if (typeof message === 'string' && message.trim() !== '') {
-    return { ok: true, message }
+  if (typeof message !== 'string' || message.trim() === '') {
+    return { ok: false, reason: 'Bob envelope contained no last_message.' }
   }
 
-  // If there is no last_message but the object itself looks like a ContextBrief
-  // (i.e. Bob returned the domain JSON directly without an envelope), treat it as the message.
-  if ('schemaVersion' in envelope) {
-    return { ok: true, message: stdout }
-  }
-
-  return { ok: false, reason: 'Bob envelope contained no last_message.' }
+  return { ok: true, message }
 }
 
 // ---------------------------------------------------------------------------
 // Brief extractor — parse ContextBrief from Bob's last_message
 // ---------------------------------------------------------------------------
 
-export function extractBrief(message: string): AnalyzeResult {
-  // Expect the model to return a raw JSON object.
-  // Accept a fenced code block as a graceful fallback, but do NOT extract
-  // an arbitrary JSON-looking substring deeper in prose.
+/**
+ * Parse and validate the model's raw text response as a ModelOutput.
+ * Does NOT assemble the final ContextBrief — call assembleBrief() after this.
+ *
+ * Accepts a fenced ```json block as a graceful fallback, but rejects
+ * any response that is not entirely a JSON object (no prose allowed).
+ */
+export function parseModelOutput(message: string): { ok: true; output: ModelOutput } | { ok: false; reason: string } {
   let jsonText = message.trim()
 
   // Strip a single ```json ... ``` fence if present
@@ -221,7 +291,7 @@ export function extractBrief(message: string): AnalyzeResult {
   if (!jsonText.startsWith('{')) {
     return {
       ok: false,
-      reason: 'Bob response did not start with a JSON object. Refusing to extract substring.',
+      reason: 'Model response did not start with a JSON object. Refusing to extract substring.',
     }
   }
 
@@ -229,24 +299,40 @@ export function extractBrief(message: string): AnalyzeResult {
   try {
     parsed = JSON.parse(jsonText)
   } catch {
-    return { ok: false, reason: 'Bob response was not valid JSON.' }
+    return { ok: false, reason: 'Model response was not valid JSON.' }
   }
 
-  const result = ContextBriefSchema.safeParse(parsed)
+  // Validate against the strict ModelOutput schema — rejects any extra fields
+  // the model may have invented (sources, provenance, schemaVersion, URLs, SHAs, …)
+  const result = ModelOutputSchema.safeParse(parsed)
   if (!result.success) {
     const issues = result.error.issues.slice(0, 3).map((i) => i.message).join('; ')
-    return { ok: false, reason: `ContextBrief schema validation failed: ${issues}` }
+    return { ok: false, reason: `Model output schema validation failed: ${issues}` }
   }
 
-  const invalidCitations = validateCitations(result.data)
-  if (invalidCitations.length > 0) {
-    return {
-      ok: false,
-      reason: `Brief cited unknown source IDs: ${invalidCitations.join(', ')}`,
-    }
-  }
+  return { ok: true, output: result.data }
+}
 
-  return { ok: true, brief: result.data }
+/**
+ * @deprecated Use parseModelOutput() + assembleBrief() instead.
+ * Kept for the existing test suite; will be removed once tests are updated.
+ */
+export function extractBrief(message: string): AnalyzeResult {
+  // This legacy path cannot perform citation validation against the collector
+  // manifest because it has no collection context.  It is preserved only to
+  // avoid breaking existing tests that call it directly.
+  const modelResult = parseModelOutput(message)
+  if (!modelResult.ok) {
+    return { ok: false, reason: modelResult.reason }
+  }
+  // Legacy: build a minimal unavailable brief stub from the model output so
+  // callers that expect a ContextBrief shape still receive one.
+  // NOTE: this path is NOT used in production — analyze() uses assembleBrief().
+  return {
+    ok: false,
+    reason:
+      'extractBrief() is deprecated; model output parsed but no collection context available for assembly.',
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +428,9 @@ export class LiveBobProvider implements BobProvider {
 // Main analyze function
 // ---------------------------------------------------------------------------
 
+/** Compass version embedded in all produced briefs. */
+const COMPASS_VERSION = '0.1.0'
+
 export async function analyze(
   collection: CollectionResult,
   trustedInstructions: string,
@@ -365,14 +454,19 @@ export async function analyze(
   if (!envelopeResult.ok) {
     briefResult = { ok: false, reason: envelopeResult.reason }
   } else {
-    briefResult = extractBrief(envelopeResult.message)
+    const modelResult = parseModelOutput(envelopeResult.message)
+    if (!modelResult.ok) {
+      briefResult = { ok: false, reason: modelResult.reason }
+    } else {
+      briefResult = assembleBrief(modelResult.output, collection, COMPASS_VERSION)
+    }
   }
 
   // One optional repair attempt when initial extraction failed
   if (!briefResult.ok && config.allowRepair) {
     const repairPrompt =
       `The previous response failed validation: ${briefResult.reason}\n\n` +
-      `Please return ONLY a corrected ContextBrief JSON object.\n\n` +
+      `Please return ONLY a corrected model output JSON object.\n\n` +
       prompt
     let repairStdout: string
     try {
@@ -385,7 +479,11 @@ export async function analyze(
     if (!repairEnvelope.ok) {
       return { ok: false, reason: `Repair envelope invalid: ${repairEnvelope.reason}` }
     }
-    return extractBrief(repairEnvelope.message)
+    const repairModel = parseModelOutput(repairEnvelope.message)
+    if (!repairModel.ok) {
+      return { ok: false, reason: `Repair model output invalid: ${repairModel.reason}` }
+    }
+    return assembleBrief(repairModel.output, collection, COMPASS_VERSION)
   }
 
   return briefResult
