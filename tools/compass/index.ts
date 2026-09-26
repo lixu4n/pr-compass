@@ -8,10 +8,12 @@
  * Environment variables:
  *   GITHUB_TOKEN        — required for GitHub API calls (publish)
  *   BOB_API_KEY         — required for live Bob Shell analysis
- *     (also accepted as BOBSHELL_API_KEY per current Bob docs)
  *   BOB_PATH            — path to bob executable (default: "bob")
  *   COMPASS_DRY_RUN     — set to "true" to skip publishing
- *   COMPASS_ALLOW_REPAIR— set to "true" to allow one Bob repair attempt
+ *   COMPASS_ALLOW_REPAIR— optional repair; splits the same analysis cost budget
+ *   COMPASS_MAX_COST    — requested total Bobcoin limit (default 0.5; maximum 1)
+ *   COMPASS_MAX_TURNS   — per-invocation turn limit (default 4; maximum 8)
+ *   COMPASS_ACCEPT_BOB_LICENSE — explicit consent, "true" required for live Bob
  *
  * GitHub Actions inputs (set via INPUT_* env vars by the Action runner):
  *   INPUT_OWNER, INPUT_REPO, INPUT_PR_NUMBER
@@ -25,6 +27,7 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { collect } from './collect.js'
 import { analyze, LiveBobProvider } from './analyze.js'
+import { runtimeLimits } from './bob-runtime.js'
 import { validateBrief } from './validate.js'
 import { render, renderUnavailable } from './render.js'
 import { publish } from './publish.js'
@@ -114,6 +117,11 @@ async function main(): Promise<void> {
   const dryRun = getEnv('COMPASS_DRY_RUN') === 'true'
   const allowRepair = getEnv('COMPASS_ALLOW_REPAIR') === 'true'
   const bobPath = getEnv('BOB_PATH', 'bob')
+  const limits = runtimeLimits({
+    bobPath,
+    maxCost: Number(getEnv('COMPASS_MAX_COST', '0.5')),
+    maxTurns: Number(getEnv('COMPASS_MAX_TURNS', '4')),
+  })
 
   const githubToken = process.env['GITHUB_TOKEN'] ?? ''
 
@@ -144,9 +152,9 @@ async function main(): Promise<void> {
   const bobProvider = new LiveBobProvider()
   const analyzeResult = await analyze(collection, trustedInstructions, {
     bobPath,
-    timeoutMs: 120_000,
+    ...limits,
     allowRepair,
-    unverifiedFlagsEnabled: false,
+    acceptLicense: getEnv('COMPASS_ACCEPT_BOB_LICENSE') === 'true',
   }, bobProvider)
 
   let commentBody: string

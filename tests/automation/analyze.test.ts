@@ -56,7 +56,6 @@ const TEST_CONFIG: AnalyzeConfig = {
   bobPath: '/usr/bin/bob',
   timeoutMs: 5_000,
   allowRepair: false,
-  unverifiedFlagsEnabled: false,
 }
 
 // ---------------------------------------------------------------------------
@@ -168,10 +167,7 @@ describe('parseEnvelope', () => {
     // Bob status field must be rejected.
     const raw = '{"schemaVersion":1,"status":"ok"}'
     const result = parseEnvelope(raw)
-    // "status":"ok" is not an envelope success status — requires envelope.status === 'success' | 'ok'
-    // Actually the object has status:"ok" — accept: this is still a valid envelope check
-    // The real rejection case is objects that don't have status at all, or have non-success status
-    expect(typeof result.ok).toBe('boolean')
+    expect(result.ok).toBe(false)
     // The key guarantee: error prose with embedded JSON is rejected (see contract2.test.ts)
   })
 })

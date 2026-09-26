@@ -5,11 +5,14 @@
 Compass prepares context for a human PR reviewer: **Purpose**, **Relevant context**,
 and **Suggested reading order**. It does not approve, repair or certify a PR.
 
-The Node distribution now builds and passes offline package checks. **Do not enable
-live PR automation yet.** The existing Bob process adapter still needs verified
-non-interactive flags, enforced tool restrictions, cost limits and a minimal child
-environment. GitHub publishing identity/freshness handling also needs the separate
-repairs identified in review. Packaging success is not live-integration success.
+The Node distribution builds and passes offline package checks. The Bob subprocess
+adapter now targets the user's verified **Bob Shell 2.0.5**, with mandatory tool
+restrictions, bounded resources and a minimal child environment. Its process tests
+use a harmless fake executable, not real Bob inference.
+
+**Do not enable live PR automation yet.** A real authenticated inference has not
+been demonstrated. GitHub publishing identity/freshness handling still needs its
+separate repair. Passing offline tests is not live-integration success.
 
 The React app remains an optional legacy viewer. It does not invoke Bob and is not
 required to render the GitHub comment.
@@ -29,7 +32,7 @@ npm run lint
 ```
 
 The current lint script checks `src/`, not all automation code. Existing toolchain
-security advisories are not resolved by this packaging-only change. Review them
+security advisories are not resolved by the packaging or adapter changes. Review them
 separately; do not blindly run `npm audit fix --force` or expose dev/test servers.
 
 ## Build the Action
@@ -131,15 +134,68 @@ explicit license acceptance and securely configured authentication are separate
 prerequisites. The current example does not install Bob. **Do not run a paid
 "hello" command simply to test packaging.**
 
-The current source adapter and its environment-variable compatibility assumptions
-have not yet been aligned with these requirements. They remain unchanged by this
-packaging repair. A temporary workspace alone does not isolate an agent from the
-runner's files or credentials. Do not trust the adapter's header comments as proof
-that restrictions are enforced.
+### Restricted adapter
+
+The user supplied `bob run --help` from **2.0.5, commit 2dc180906**. Before each
+inference, Compass checks `bob --version` and `bob run --help` in an isolated
+workspace, without the API key. It rejects unverified versions or missing flags;
+it never retries with unrestricted tools. These version/help checks are not
+inference calls.
+
+The analysis command uses `run`, `--format json`, `--mode ask`, `--disable-mcp`,
+`--disable-subagents`, and disables the read/edit/execute/mcp/skill/todo/subagent/mode
+tool groups. Bob receives the already-collected bundle over stdin, not as shell
+code or command arguments. The child gets a fresh HOME, XDG config/cache/data,
+temporary directory, working directory, and a small environment allowlist. The
+GitHub token, NODE_OPTIONS, unrelated secrets, ambient Bob configuration and proxy
+environment are not forwarded. Corporate proxies/custom CAs are unsupported until
+an explicit reviewed configuration path is added.
+
+This is capability reduction, **not an OS filesystem/network sandbox**. It assumes
+a trusted Bob executable and dedicated trusted macOS/Linux runner; Windows is not
+supported. CLI restrictions and configuration isolation must still be confirmed in
+an approved real run. No claim is made that untrusted input can never influence a
+model.
+
+### Consent and resource limits
+
+| Action input | CLI environment | Default |
+|---|---|---|
+| `max_cost` | `COMPASS_MAX_COST` | 0.5 Bobcoins, allowed greater than 0 through 1 |
+| `max_turns` | `COMPASS_MAX_TURNS` | 4 per invocation, allowed 1 through 8 |
+| `accept_bob_license` | `COMPASS_ACCEPT_BOB_LICENSE` | false; explicit true required |
+| `allow_repair` | `COMPASS_ALLOW_REPAIR` | false |
+
+No inference starts without the documented `BOB_API_KEY` and explicit permission
+to accept IBM's license in the isolated session. The old BOBSHELL_API_KEY alias
+is not used. Never put key values in chat, commits or command arguments.
+
+The runtime always passes cost/turn limits. If optional repair is enabled, the
+same total requested cost allowance is divided across the two invocations rather
+than doubled. The vendor's `--max-cost` mechanism is a requested spending ceiling,
+not an independently proven exact billing guarantee; inspect actual task usage.
+Each invocation has a 120-second default wall-clock limit including preflight,
+a 128,000-byte prompt cap and a combined 1,000,000-byte stdout/stderr cap. These
+cannot be raised beyond the MVP ceilings through configuration.
+
+Timeout/overflow triggers process-group termination, escalating to SIGKILL if
+necessary. Workspace cleanup occurs after the process exits. Raw stderr is not
+published. Actual known secret values are redacted from returned errors, and the
+parser requires a successful JSON envelope rather than extracting JSON from logs.
+
+### Offline adapter tests
+
+`npm test` includes `tests/automation/bob-runtime.test.ts`. It generates a small
+local fake executable implementing version/help and synthetic responses. Tests
+cover argument restrictions, stdin transport, environment isolation, consent/key
+preconditions, missing flags/version, timeout escalation, output/prompt caps,
+cleanup, redaction and repair-budget splitting. No real Bob executable or API is
+used. These tests need no real key and consume no Bobcoins.
 
 ## Before enabling PR-triggered execution
 
-- Repair the live adapter, budget enforcement and child-process trust boundary.
+- Complete an explicitly approved real adapter smoke test on a small synthetic
+  input; verify account access, authentication, restrictions and actual usage.
 - Repair standard GITHUB_TOKEN identity handling and recheck freshness immediately
   before comment writes.
 - Validate collection scope and context quality on exact source versions.

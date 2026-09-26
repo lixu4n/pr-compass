@@ -58,5 +58,11 @@ jobs:
           pr_number: ${{ github.event.pull_request.number }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           bob_api_key: ${{ secrets.COMPASS_BOB_API_KEY }}
-          dry_run: 'false'
+          # Dry-run still calls Bob; it only prevents comment publication.
+          dry_run: 'true'
           allow_repair: 'false'
+          max_cost: '0.5'
+          max_turns: '4'
+          # Explicit permission is required. Leave false until the team approves
+          # license acceptance and a paid smoke test; no inference starts yet.
+          accept_bob_license: 'false'

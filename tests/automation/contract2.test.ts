@@ -101,7 +101,6 @@ const TEST_CONFIG: AnalyzeConfig = {
   bobPath: '/usr/bin/bob',
   timeoutMs: 5_000,
   allowRepair: false,
-  unverifiedFlagsEnabled: false,
 }
 
 function makeEnvelope(message: string): string {

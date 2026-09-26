@@ -1,37 +1,11 @@
 /**
- * analyze.ts — constrained Bob Shell adapter.
- *
- * Design rules (from the engineering brief):
- * - Uses child_process.execFile with shell:false and an argument array.
- * - Pipes the prompt via stdin; no shell interpolation of PR content.
- * - The GitHub publishing token is NEVER passed into the Bob process.
- * - Applies configurable cost/turn limits and an outer timeout.
- * - Redacts secret-shaped values from errors/logs.
- * - Parses the Bob result envelope; rejects failed/limited sessions.
- * - Validates the inner ContextBrief via Zod; no fallback to mock on failure.
- * - Supports at most one explicitly budgeted repair attempt (disabled by default).
- * - Returns an honest unavailable state if validation fails.
- * - Live execution is BLOCKED until BOB_SHELL_PATH and BOB_API_KEY are configured.
- * - Injecting a BobProvider allows offline testing without any live Bob call.
- *
- * Supported Bob Shell flags (verified against docs):
- *   -p "<prompt>"         non-interactive prompt
- *   --auth-method api-key uses BOBSHELL_API_KEY env var
- *   --workspace <path>    clean temp workspace (no repo-supplied config)
- *   --accept-license      required for first run / CI
- *
- * Flags referenced in the brief but NOT yet confirmed in current docs:
- *   --format json, --max-cost, --max-turns, --disable-mcp, --disable-subagents,
- *   --disable-tool-groups
- * These are guarded behind UNVERIFIED_FLAGS_ENABLED and will throw if used
- * without explicit opt-in. Do NOT enable in production until verified against
- * `bob --help` on the installed version.
+ * Context analysis and host-owned evidence assembly.
+ * Live execution uses the restricted Bob Shell 2.0.5 adapter in bob-runtime.ts.
+ * Tests inject providers; no mock is ever selected automatically for live work.
  */
 
-import { spawn } from 'node:child_process'
-import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
-import * as path from 'node:path'
+import { runRestrictedBob, runtimeLimits } from './bob-runtime.js'
+import type { BobRuntimeConfig } from './bob-runtime.js'
 import { ModelOutputSchema, validateModelCitations } from '../../src/types/ContextBrief.js'
 import type { ContextBrief, ModelOutput } from '../../src/types/ContextBrief.js'
 import type { CollectionResult } from './collect.js'
@@ -40,22 +14,9 @@ import type { CollectionResult } from './collect.js'
 // Configuration
 // ---------------------------------------------------------------------------
 
-export interface AnalyzeConfig {
-  /** Absolute path to the bob executable. Required for live runs. */
-  bobPath: string
-  /** Maximum wall-clock milliseconds for the Bob process. Default: 120_000 */
-  timeoutMs?: number
-  /** If true, attempt one repair pass on validation failure. Default: false */
+export interface AnalyzeConfig extends BobRuntimeConfig {
+  /** One optional repair; total maxCost is split between the two invocations. */
   allowRepair?: boolean
-  /**
-   * Opt-in to unverified flags (--format, --max-cost, --max-turns, etc.).
-   * Default: false. Do not enable until flags are confirmed against bob --help.
-   */
-  unverifiedFlagsEnabled?: boolean
-  /** Max cost limit passed to --max-cost (only when unverifiedFlagsEnabled). */
-  maxCost?: number
-  /** Max turns passed to --max-turns (only when unverifiedFlagsEnabled). */
-  maxTurns?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +133,10 @@ const SECRET_PATTERNS = [
 
 export function redactSecrets(text: string): string {
   let result = text
+  for (const name of ['BOB_API_KEY', 'BOBSHELL_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN']) {
+    const value = process.env[name]
+    if (value) result = result.split(value).join('[REDACTED]')
+  }
   for (const pattern of SECRET_PATTERNS) {
     result = result.replace(pattern, '[REDACTED]')
   }
@@ -246,7 +211,7 @@ export function parseEnvelope(stdout: string): { ok: true; message: string } | {
   } catch {
     return {
       ok: false,
-      reason: redactSecrets(`Bob output was not a valid JSON envelope: ${stdout.slice(0, 200)}`),
+      reason: 'Bob output was not a valid JSON envelope.',
     }
   }
 
@@ -263,10 +228,10 @@ export function parseEnvelope(stdout: string): { ok: true; message: string } | {
   }
 
   // Require an explicit success status
-  if (!envelope.status || (envelope.status !== 'success' && envelope.status !== 'ok')) {
+  if (envelope.status !== 'success' || (envelope.type !== undefined && envelope.type !== 'result')) {
     return {
       ok: false,
-      reason: `Bob session ended with status: ${envelope.status ?? '(none)'}`,
+      reason: 'Bob session did not report a successful result.',
     }
   }
 
@@ -353,85 +318,11 @@ export function extractBrief(message: string): AnalyzeResult {
 
 export class LiveBobProvider implements BobProvider {
   async run(prompt: string, config: AnalyzeConfig): Promise<string> {
-    const apiKey = process.env['BOBSHELL_API_KEY'] ?? process.env['BOB_API_KEY'] ?? ''
-    if (!apiKey) {
-      throw new Error(
-        'BOB_API_KEY / BOBSHELL_API_KEY is not set. ' +
-          'Live Bob execution is blocked until authentication is configured. ' +
-          'Set the env var in your shell or GitHub Actions secret — never paste it in chat.',
-      )
-    }
-
-    // Write prompt to a temp file to avoid any shell interpolation
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'compass-'))
-    const promptFile = path.join(tmpDir, 'prompt.txt')
-    const workspaceDir = path.join(tmpDir, 'workspace')
-    await fs.mkdir(workspaceDir)
-    await fs.writeFile(promptFile, prompt, 'utf8')
-
-    // Build the argument array — shell:false enforced by execFile
-    const args: string[] = [
-      '--auth-method', 'api-key',
-      '--accept-license',
-      '--workspace', workspaceDir,
-    ]
-
-    // Unverified flags are opt-in only
-    if (config.unverifiedFlagsEnabled) {
-      if (config.maxCost !== undefined) args.push('--max-cost', String(config.maxCost))
-      if (config.maxTurns !== undefined) args.push('--max-turns', String(config.maxTurns))
-    }
-
-    // Pipe prompt via stdin
     try {
-      const stdout = await new Promise<string>((resolve, reject) => {
-        const child = spawn(config.bobPath, args, {
-          shell: false,
-          env: {
-            ...process.env,
-            BOBSHELL_API_KEY: apiKey,
-            BOB_API_KEY: apiKey,
-            // Never pass the publishing token into Bob
-            GITHUB_TOKEN: undefined,
-            GH_TOKEN: undefined,
-          },
-        })
-
-        const chunks: Buffer[] = []
-        const errChunks: Buffer[] = []
-        child.stdout.on('data', (d: Buffer) => chunks.push(d))
-        child.stderr.on('data', (d: Buffer) => errChunks.push(d))
-
-        // Write prompt to stdin then close
-        child.stdin.write(prompt, 'utf8')
-        child.stdin.end()
-
-        const timer = setTimeout(() => {
-          child.kill('SIGTERM')
-          reject(new Error(`Bob Shell timed out after ${config.timeoutMs ?? 120_000}ms`))
-        }, config.timeoutMs ?? 120_000)
-
-        child.on('close', (code) => {
-          clearTimeout(timer)
-          if (code !== 0) {
-            const stderr = Buffer.concat(errChunks).toString('utf8').slice(0, 500)
-            reject(new Error(`Bob Shell exited with code ${code}: ${stderr}`))
-          } else {
-            resolve(Buffer.concat(chunks).toString('utf8'))
-          }
-        })
-
-        child.on('error', (err) => {
-          clearTimeout(timer)
-          reject(err)
-        })
-      })
-      return stdout
+      return await runRestrictedBob(prompt, config)
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      throw new Error(redactSecrets(`Bob Shell failed: ${msg}`))
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true })
+      const message = err instanceof Error ? err.message : String(err)
+      throw new Error(redactSecrets(message))
     }
   }
 }
@@ -450,10 +341,18 @@ export async function analyze(
   provider: BobProvider = new LiveBobProvider(),
 ): Promise<AnalyzeResult> {
   const prompt = buildPrompt(collection, trustedInstructions)
+  let invocationConfig: AnalyzeConfig
+  try {
+    const limits = runtimeLimits(config)
+    const attempts = config.allowRepair ? 2 : 1
+    invocationConfig = { ...config, ...limits, maxCost: limits.maxCost / attempts }
+  } catch (err: unknown) {
+    return { ok: false, reason: redactSecrets(err instanceof Error ? err.message : String(err)) }
+  }
 
   let stdout: string
   try {
-    stdout = await provider.run(prompt, config)
+    stdout = await provider.run(prompt, invocationConfig)
   } catch (err: unknown) {
     const msg = redactSecrets(err instanceof Error ? err.message : String(err))
     return { ok: false, reason: msg }
@@ -482,7 +381,7 @@ export async function analyze(
       prompt
     let repairStdout: string
     try {
-      repairStdout = await provider.run(repairPrompt, config)
+      repairStdout = await provider.run(repairPrompt, invocationConfig)
     } catch (err: unknown) {
       const msg = redactSecrets(err instanceof Error ? err.message : String(err))
       return { ok: false, reason: `Repair attempt also failed: ${msg}` }

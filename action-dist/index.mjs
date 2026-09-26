@@ -125,8 +125,8 @@ var require_fast_content_type_parse = __commonJS({
 });
 
 // tools/compass/index.ts
-import * as fs2 from "node:fs/promises";
-import * as path2 from "node:path";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // tools/compass/collect.ts
@@ -359,11 +359,208 @@ async function collect(provider, owner, repo, prNumber) {
   };
 }
 
-// tools/compass/analyze.ts
+// tools/compass/bob-runtime.ts
 import { spawn } from "node:child_process";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
+var SUPPORTED_BOB_VERSION = "2.0.5";
+var DISABLED_TOOL_GROUPS = "read,edit,execute,mcp,skill,todo,subagent,mode";
+function runtimeLimits(config) {
+  const limits = {
+    maxCost: config.maxCost ?? 0.5,
+    maxTurns: config.maxTurns ?? 4,
+    timeoutMs: config.timeoutMs ?? 12e4,
+    maxOutputBytes: config.maxOutputBytes ?? 1e6,
+    maxPromptBytes: config.maxPromptBytes ?? 128e3
+  };
+  if (!config.bobPath.trim()) throw new Error("Bob executable path must not be empty.");
+  if (!Number.isFinite(limits.maxCost) || limits.maxCost <= 0 || limits.maxCost > 1) {
+    throw new Error("Bob maxCost must be finite, greater than 0 and at most 1 Bobcoin for this MVP.");
+  }
+  for (const [key, ceiling] of [
+    ["maxTurns", 8],
+    ["timeoutMs", 12e4],
+    ["maxOutputBytes", 1e6],
+    ["maxPromptBytes", 128e3]
+  ]) {
+    if (!Number.isInteger(limits[key]) || limits[key] < 1 || limits[key] > ceiling) {
+      throw new Error(`Invalid Bob ${key}; expected an integer from 1 to ${ceiling}.`);
+    }
+  }
+  return limits;
+}
+function restrictedArgs(workspace, config) {
+  const limits = runtimeLimits(config);
+  if (config.acceptLicense !== true) {
+    throw new Error("Bob license acceptance requires explicit permission (COMPASS_ACCEPT_BOB_LICENSE=true).");
+  }
+  return [
+    "run",
+    "--format",
+    "json",
+    "--mode",
+    "ask",
+    "--workspace",
+    workspace,
+    "--disable-mcp",
+    "--disable-subagents",
+    "--disable-tool-groups",
+    DISABLED_TOOL_GROUPS,
+    "--max-cost",
+    String(limits.maxCost),
+    "--max-turns",
+    String(limits.maxTurns),
+    "--log-level",
+    "error",
+    "--accept-license"
+  ];
+}
+function isolatedEnvironment(root, parent, apiKey) {
+  return {
+    PATH: parent.PATH ?? "/usr/bin:/bin",
+    HOME: join(root, "home"),
+    XDG_CONFIG_HOME: join(root, "config"),
+    XDG_CACHE_HOME: join(root, "cache"),
+    XDG_DATA_HOME: join(root, "data"),
+    TMPDIR: join(root, "tmp"),
+    TMP: join(root, "tmp"),
+    TEMP: join(root, "tmp"),
+    LANG: "en_US.UTF-8",
+    ...apiKey ? { BOB_API_KEY: apiKey } : {}
+  };
+}
+async function executeBounded(options) {
+  return new Promise((resolveResult, reject) => {
+    const child = spawn(options.command, options.args, {
+      cwd: options.cwd,
+      env: options.env,
+      shell: false,
+      detached: true,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const output = [];
+    let bytes = 0;
+    let failure;
+    let finished = false;
+    let forceTimer;
+    const killGroup = (signal) => {
+      if (!child.pid) return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+      }
+    };
+    const stop = (message) => {
+      if (finished || failure) return;
+      failure = new Error(message);
+      killGroup("SIGTERM");
+      forceTimer = setTimeout(() => killGroup("SIGKILL"), 200);
+    };
+    const timer = setTimeout(() => stop("Bob process timed out."), options.timeoutMs);
+    const cleanTimers = () => {
+      clearTimeout(timer);
+      if (forceTimer) clearTimeout(forceTimer);
+    };
+    const receive = (chunk, stdout) => {
+      bytes += chunk.length;
+      if (bytes > options.maxOutputBytes) {
+        stop("Bob process exceeded the output-size limit.");
+        return;
+      }
+      if (stdout && !failure) output.push(chunk);
+    };
+    child.stdout.on("data", (chunk) => receive(chunk, true));
+    child.stderr.on("data", (chunk) => receive(chunk, false));
+    child.stdin.on("error", () => stop("Could not send the input bundle to Bob."));
+    child.once("error", (error) => {
+      finished = true;
+      cleanTimers();
+      reject(new Error(`Could not start Bob executable (${error.code ?? "spawn error"}).`));
+    });
+    child.once("close", (code, signal) => {
+      if (finished) return;
+      finished = true;
+      cleanTimers();
+      if (failure || code !== 0) killGroup("SIGKILL");
+      if (failure) reject(failure);
+      else if (code !== 0) reject(new Error(`Bob process failed (exit ${code ?? signal ?? "unknown"}).`));
+      else resolveResult(Buffer.concat(output).toString("utf8"));
+    });
+    child.stdin.end(options.input ?? "", "utf8");
+  });
+}
+async function runRestrictedBob(prompt, config) {
+  const limits = runtimeLimits(config);
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    throw new Error("Restricted Bob execution currently supports macOS and Linux only.");
+  }
+  restrictedArgs("preflight", config);
+  const apiKey = process.env.BOB_API_KEY?.trim();
+  if (!apiKey) throw new Error("BOB_API_KEY is not configured. No Bob analysis was started.");
+  if (Buffer.byteLength(prompt, "utf8") > limits.maxPromptBytes) {
+    throw new Error("Bob input bundle exceeds the prompt-size limit.");
+  }
+  const root = await mkdtemp(join(await realpath(tmpdir()), "compass-bob-"));
+  try {
+    const workspace = join(root, "workspace");
+    await Promise.all(["workspace", "home", "config", "cache", "data", "tmp"].map((directory) => mkdir(join(root, directory), { mode: 448 })));
+    const command = isAbsolute(config.bobPath) || !config.bobPath.includes("/") ? config.bobPath : resolve(config.bobPath);
+    const deadline = Date.now() + limits.timeoutMs;
+    const remaining = () => {
+      const milliseconds = deadline - Date.now();
+      if (milliseconds <= 0) throw new Error("Bob process timed out.");
+      return milliseconds;
+    };
+    const preflightEnv = isolatedEnvironment(root, process.env);
+    const version = await executeBounded({
+      command,
+      args: ["--version"],
+      cwd: workspace,
+      env: preflightEnv,
+      timeoutMs: Math.min(1e4, remaining()),
+      maxOutputBytes: 32e3
+    });
+    const versionMatch = version.match(/\b(\d+\.\d+\.\d+)(?:[-+][\w.-]+)?\b/);
+    if (versionMatch?.[1] !== SUPPORTED_BOB_VERSION) {
+      throw new Error(`Compass currently requires verified Bob Shell ${SUPPORTED_BOB_VERSION}; review another version before enabling it.`);
+    }
+    const help = await executeBounded({
+      command,
+      args: ["run", "--help"],
+      cwd: workspace,
+      env: preflightEnv,
+      timeoutMs: Math.min(1e4, remaining()),
+      maxOutputBytes: 64e3
+    });
+    const required = [
+      "--format",
+      "--workspace",
+      "--mode",
+      "--max-cost",
+      "--max-turns",
+      "--log-level",
+      "--disable-mcp",
+      "--disable-subagents",
+      "--disable-tool-groups",
+      "--accept-license"
+    ];
+    if (required.some((flag) => !new RegExp(`${flag}(?=[\\s,=<]|$)`).test(help))) {
+      throw new Error("Bob Shell does not advertise all required restrictions. Refusing an unrestricted fallback.");
+    }
+    return await executeBounded({
+      command,
+      args: restrictedArgs(workspace, config),
+      cwd: workspace,
+      env: isolatedEnvironment(root, process.env, apiKey),
+      input: prompt,
+      timeoutMs: remaining(),
+      maxOutputBytes: limits.maxOutputBytes
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -843,8 +1040,8 @@ function getErrorMap() {
 
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path3, errorMaps, issueData } = params;
-  const fullPath = [...path3, ...issueData.path || []];
+  const { data, path: path2, errorMaps, issueData } = params;
+  const fullPath = [...path2, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -960,11 +1157,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path3, key) {
+  constructor(parent, value, path2, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path3;
+    this._path = path2;
     this._key = key;
   }
   get path() {
@@ -4618,6 +4815,10 @@ var SECRET_PATTERNS = [
 ];
 function redactSecrets(text) {
   let result = text;
+  for (const name of ["BOB_API_KEY", "BOBSHELL_API_KEY", "GITHUB_TOKEN", "GH_TOKEN"]) {
+    const value = process.env[name];
+    if (value) result = result.split(value).join("[REDACTED]");
+  }
   for (const pattern of SECRET_PATTERNS) {
     result = result.replace(pattern, "[REDACTED]");
   }
@@ -4663,7 +4864,7 @@ function parseEnvelope(stdout) {
   } catch {
     return {
       ok: false,
-      reason: redactSecrets(`Bob output was not a valid JSON envelope: ${stdout.slice(0, 200)}`)
+      reason: "Bob output was not a valid JSON envelope."
     };
   }
   if (envelope === null || typeof envelope !== "object" || Array.isArray(envelope)) {
@@ -4672,10 +4873,10 @@ function parseEnvelope(stdout) {
       reason: "Bob output must be a JSON object envelope"
     };
   }
-  if (!envelope.status || envelope.status !== "success" && envelope.status !== "ok") {
+  if (envelope.status !== "success" || envelope.type !== void 0 && envelope.type !== "result") {
     return {
       ok: false,
-      reason: `Bob session ended with status: ${envelope.status ?? "(none)"}`
+      reason: "Bob session did not report a successful result."
     };
   }
   const message = envelope.last_message;
@@ -4711,80 +4912,28 @@ function parseModelOutput(message) {
 }
 var LiveBobProvider = class {
   async run(prompt, config) {
-    const apiKey = process.env["BOBSHELL_API_KEY"] ?? process.env["BOB_API_KEY"] ?? "";
-    if (!apiKey) {
-      throw new Error(
-        "BOB_API_KEY / BOBSHELL_API_KEY is not set. Live Bob execution is blocked until authentication is configured. Set the env var in your shell or GitHub Actions secret \u2014 never paste it in chat."
-      );
-    }
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "compass-"));
-    const promptFile = path.join(tmpDir, "prompt.txt");
-    const workspaceDir = path.join(tmpDir, "workspace");
-    await fs.mkdir(workspaceDir);
-    await fs.writeFile(promptFile, prompt, "utf8");
-    const args = [
-      "--auth-method",
-      "api-key",
-      "--accept-license",
-      "--workspace",
-      workspaceDir
-    ];
-    if (config.unverifiedFlagsEnabled) {
-      if (config.maxCost !== void 0) args.push("--max-cost", String(config.maxCost));
-      if (config.maxTurns !== void 0) args.push("--max-turns", String(config.maxTurns));
-    }
     try {
-      const stdout = await new Promise((resolve, reject) => {
-        const child = spawn(config.bobPath, args, {
-          shell: false,
-          env: {
-            ...process.env,
-            BOBSHELL_API_KEY: apiKey,
-            BOB_API_KEY: apiKey,
-            // Never pass the publishing token into Bob
-            GITHUB_TOKEN: void 0,
-            GH_TOKEN: void 0
-          }
-        });
-        const chunks = [];
-        const errChunks = [];
-        child.stdout.on("data", (d) => chunks.push(d));
-        child.stderr.on("data", (d) => errChunks.push(d));
-        child.stdin.write(prompt, "utf8");
-        child.stdin.end();
-        const timer = setTimeout(() => {
-          child.kill("SIGTERM");
-          reject(new Error(`Bob Shell timed out after ${config.timeoutMs ?? 12e4}ms`));
-        }, config.timeoutMs ?? 12e4);
-        child.on("close", (code) => {
-          clearTimeout(timer);
-          if (code !== 0) {
-            const stderr = Buffer.concat(errChunks).toString("utf8").slice(0, 500);
-            reject(new Error(`Bob Shell exited with code ${code}: ${stderr}`));
-          } else {
-            resolve(Buffer.concat(chunks).toString("utf8"));
-          }
-        });
-        child.on("error", (err) => {
-          clearTimeout(timer);
-          reject(err);
-        });
-      });
-      return stdout;
+      return await runRestrictedBob(prompt, config);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(redactSecrets(`Bob Shell failed: ${msg}`));
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(redactSecrets(message));
     }
   }
 };
 var COMPASS_VERSION = "0.1.0";
 async function analyze(collection, trustedInstructions, config, provider = new LiveBobProvider()) {
   const prompt = buildPrompt(collection, trustedInstructions);
+  let invocationConfig;
+  try {
+    const limits = runtimeLimits(config);
+    const attempts = config.allowRepair ? 2 : 1;
+    invocationConfig = { ...config, ...limits, maxCost: limits.maxCost / attempts };
+  } catch (err) {
+    return { ok: false, reason: redactSecrets(err instanceof Error ? err.message : String(err)) };
+  }
   let stdout;
   try {
-    stdout = await provider.run(prompt, config);
+    stdout = await provider.run(prompt, invocationConfig);
   } catch (err) {
     const msg = redactSecrets(err instanceof Error ? err.message : String(err));
     return { ok: false, reason: msg };
@@ -4809,7 +4958,7 @@ Please return ONLY a corrected model output JSON object.
 ` + prompt;
     let repairStdout;
     try {
-      repairStdout = await provider.run(repairPrompt, config);
+      repairStdout = await provider.run(repairPrompt, invocationConfig);
     } catch (err) {
       const msg = redactSecrets(err instanceof Error ? err.message : String(err));
       return { ok: false, reason: `Repair attempt also failed: ${msg}` };
@@ -6030,17 +6179,17 @@ function requestLog(octokit) {
     octokit.log.debug("request", options);
     const start = Date.now();
     const requestOptions = octokit.request.endpoint.parse(options);
-    const path3 = requestOptions.url.replace(options.baseUrl, "");
+    const path2 = requestOptions.url.replace(options.baseUrl, "");
     return request2(options).then((response) => {
       const requestId = response.headers["x-github-request-id"];
       octokit.log.info(
-        `${requestOptions.method} ${path3} - ${response.status} with id ${requestId} in ${Date.now() - start}ms`
+        `${requestOptions.method} ${path2} - ${response.status} with id ${requestId} in ${Date.now() - start}ms`
       );
       return response;
     }).catch((error) => {
       const requestId = error.response?.headers["x-github-request-id"] || "UNKNOWN";
       octokit.log.error(
-        `${requestOptions.method} ${path3} - ${error.status} with id ${requestId} in ${Date.now() - start}ms`
+        `${requestOptions.method} ${path2} - ${error.status} with id ${requestId} in ${Date.now() - start}ms`
       );
       throw error;
     });
@@ -8713,7 +8862,7 @@ var OctokitPublishProvider = class {
 };
 
 // tools/compass/index.ts
-var __dirname = path2.dirname(fileURLToPath(import.meta.url));
+var __dirname = path.dirname(fileURLToPath(import.meta.url));
 function getRequiredEnv(name) {
   const val = process.env[name];
   if (!val) throw new Error(`Required environment variable ${name} is not set.`);
@@ -8723,10 +8872,10 @@ function getEnv(name, fallback = "") {
   return process.env[name] ?? fallback;
 }
 async function readTrustedInstructions() {
-  const promptPath = path2.join(__dirname, "prompts", "context.md");
+  const promptPath = path.join(__dirname, "prompts", "context.md");
   let instructions;
   try {
-    instructions = await fs2.readFile(promptPath, "utf8");
+    instructions = await fs.readFile(promptPath, "utf8");
   } catch {
     throw new Error("Packaged Compass prompt is missing or unreadable. Run npm run build:action.");
   }
@@ -8773,6 +8922,11 @@ async function main() {
   const dryRun = getEnv("COMPASS_DRY_RUN") === "true";
   const allowRepair = getEnv("COMPASS_ALLOW_REPAIR") === "true";
   const bobPath = getEnv("BOB_PATH", "bob");
+  const limits = runtimeLimits({
+    bobPath,
+    maxCost: Number(getEnv("COMPASS_MAX_COST", "0.5")),
+    maxTurns: Number(getEnv("COMPASS_MAX_TURNS", "4"))
+  });
   const githubToken = process.env["GITHUB_TOKEN"] ?? "";
   console.log(`Compass: analyzing ${owner}/${repo}#${prNumber}`);
   if (dryRun) console.log("Compass: DRY RUN \u2014 no comments will be posted");
@@ -8794,9 +8948,9 @@ async function main() {
   const bobProvider = new LiveBobProvider();
   const analyzeResult = await analyze(collection, trustedInstructions, {
     bobPath,
-    timeoutMs: 12e4,
+    ...limits,
     allowRepair,
-    unverifiedFlagsEnabled: false
+    acceptLicense: getEnv("COMPASS_ACCEPT_BOB_LICENSE") === "true"
   }, bobProvider);
   let commentBody;
   if (!analyzeResult.ok) {

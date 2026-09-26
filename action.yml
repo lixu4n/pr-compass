@@ -41,7 +41,19 @@ inputs:
     required: false
     default: 'false'
   allow_repair:
-    description: 'Set to "true" to allow one Bob repair attempt on validation failure'
+    description: 'One optional repair; splits max_cost between two invocations, not two full budgets'
+    required: false
+    default: 'false'
+  max_cost:
+    description: 'Requested total Bobcoin limit for analysis (greater than 0, at most 1); not a billing guarantee'
+    required: false
+    default: '0.5'
+  max_turns:
+    description: 'Per-invocation turn limit (integer 1–8)'
+    required: false
+    default: '4'
+  accept_bob_license:
+    description: 'Explicit IBM license acceptance for isolated headless runs; set true only with permission'
     required: false
     default: 'false'
 
@@ -67,8 +79,10 @@ runs:
         INPUT_PR_NUMBER: ${{ inputs.pr_number }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         BOB_API_KEY: ${{ inputs.bob_api_key }}
-        BOBSHELL_API_KEY: ${{ inputs.bob_api_key }}
         BOB_PATH: ${{ inputs.bob_path }}
         COMPASS_DRY_RUN: ${{ inputs.dry_run }}
         COMPASS_ALLOW_REPAIR: ${{ inputs.allow_repair }}
+        COMPASS_MAX_COST: ${{ inputs.max_cost }}
+        COMPASS_MAX_TURNS: ${{ inputs.max_turns }}
+        COMPASS_ACCEPT_BOB_LICENSE: ${{ inputs.accept_bob_license }}
       run: node action-dist/index.mjs
