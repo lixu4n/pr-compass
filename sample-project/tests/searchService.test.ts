@@ -2,6 +2,19 @@ import { describe, it, expect } from 'vitest'
 import { search } from '../src/searchService'
 
 describe('search — baseline behavior', () => {
+
+  it('does not match text that appears only in a snipet', ()=> {
+    const response = search('configure')
+
+    expect(response.status).toBe(200)
+    expect(response.body.results).toEqual([])
+    
+  })
+
+
+
+
+
   it('returns status 200 for a query with no results', () => {
     const response = search('zzz-no-match')
     expect(response.status).toBe(200)
