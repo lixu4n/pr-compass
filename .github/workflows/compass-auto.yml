@@ -1,0 +1,99 @@
+name: Compass automatic briefs
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compass-${{ github.repository }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  compass:
+    name: Compass
+    # Opt-in is explicit. Merely pushing this file never enables paid inference.
+    if: >-
+      vars.COMPASS_ENABLED == 'true' && github.run_attempt == 1 &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    steps:
+      - name: Verify trusted revision and chosen model
+        env:
+          TRUSTED_SHA: ${{ vars.COMPASS_ACTION_SHA }}
+          PROVIDER: ${{ vars.COMPASS_PROVIDER || 'bob' }}
+          BOB_KEY: ${{ secrets.COMPASS_BOB_API_KEY }}
+          OPENAI_KEY: ${{ secrets.COMPASS_OPENAI_API_KEY }}
+          ACCEPT_LICENSE: ${{ vars.COMPASS_ACCEPT_BOB_LICENSE }}
+        run: |
+          [[ "$TRUSTED_SHA" =~ ^[a-fA-F0-9]{40}$ ]] || { echo 'Set COMPASS_ACTION_SHA to a reviewed full Compass commit SHA.'; exit 1; }
+          case "$PROVIDER" in
+            bob) test -n "$BOB_KEY" && test "$ACCEPT_LICENSE" = true ;;
+            openai) test -n "$OPENAI_KEY" ;;
+            *) echo 'Unsupported provider'; exit 1 ;;
+          esac
+      - name: Fetch trusted Compass code, never target PR code
+        uses: actions/checkout@v4
+        with:
+          repository: lixu4n/pr-compass
+          ref: ${{ vars.COMPASS_ACTION_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Create Compass App token
+        id: compass-app
+        if: vars.COMPASS_APP_ID != ''
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.COMPASS_APP_ID }}
+          private-key: ${{ secrets.COMPASS_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: write
+          permission-checks: write
+      - name: Install IBM Bob Shell
+        if: vars.COMPASS_PROVIDER != 'openai'
+        run: |
+          curl -fsSL https://bob.ibm.com/download/bobshell.sh -o "$RUNNER_TEMP/bobshell.sh"
+          bash "$RUNNER_TEMP/bobshell.sh" --pm npm --version 2.0.5
+          # Runtime refuses any unverified version before paid inference.
+          command -v bob
+          bob --version
+      - name: Gather context, analyze, and post the brief
+        uses: ./
+        with:
+          owner: ${{ github.repository_owner }}
+          repo: ${{ github.event.repository.name }}
+          pr_number: ${{ github.event.pull_request.number }}
+          github_token: ${{ steps.compass-app.outputs.token || secrets.GITHUB_TOKEN }}
+          app_slug: ${{ steps.compass-app.outputs.app-slug }}
+          provider: ${{ vars.COMPASS_PROVIDER || 'bob' }}
+          bob_api_key: ${{ secrets.COMPASS_BOB_API_KEY }}
+          openai_api_key: ${{ secrets.COMPASS_OPENAI_API_KEY }}
+          model: ${{ vars.COMPASS_MODEL || 'gpt-4.1-mini' }}
+          max_output_tokens: '2048'
+          max_cost: '0.5'
+          max_turns: '4'
+          allow_repair: 'false'
+          dry_run: 'false'
+          allow_private: ${{ vars.COMPASS_ALLOW_PRIVATE || 'false' }}
+          accept_bob_license: ${{ vars.COMPASS_ACCEPT_BOB_LICENSE || 'false' }}
+          progress: 'true'
+          head_sha: ${{ github.event.pull_request.head.sha }}
+      - name: Save brief artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compass-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: compass-output/
+          if-no-files-found: ignore
+          retention-days: 7

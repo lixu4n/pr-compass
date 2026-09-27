@@ -1,0 +1,16 @@
+.git
+node_modules
+dist
+server-dist
+.compass-data
+compass-output
+.env
+.env.*
+*.pem
+*.key
+secrets
+bob_sessions
+evidence
+submission
+work
+outputs
