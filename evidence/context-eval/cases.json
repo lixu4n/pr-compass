@@ -1,0 +1,8 @@
+[
+ {"id":"late-change","kind":"selection","line":200,"mustInclude":"line 200","mustExclude":"line 1\n","humanQuestion":"Does the selected neighborhood contain enough of the changed function?"},
+ {"id":"early-change","kind":"selection","line":2,"mustInclude":"line 2\n","mustExclude":"line 200","humanQuestion":"Are imports necessary to interpret the change?"},
+ {"id":"middle-change","kind":"selection","line":100,"mustInclude":"line 100","mustExclude":"line 1\n","humanQuestion":"Which directly related tests would improve this bundle?"},
+ {"id":"manual-vs-auto","kind":"human","source":"https://github.com/lixu4n/pr-compass/pull/4#issuecomment-5852888873","required":["Distinguish event-triggered automatic workflow from fixed-PR manual workflow","Describe a requested limit, not a guaranteed billing cap"],"forbidden":["Automatic workflow targets only PR 3","Guaranteed maximum cost"]},
+ {"id":"title-only-search","kind":"human","source":"https://github.com/lixu4n/pr-compass/pull/3#issuecomment-5852849724","required":["Snippet matching removed","Case-insensitive title matching retained","Regression test covers snippet-only query"],"forbidden":["PR has merged","Comprehensive caller coverage"]},
+ {"id":"insufficient-context","kind":"human","required":["Acknowledge omitted callers","Omit irrelevant context rather than filling all slots"],"forbidden":["No downstream impact without caller evidence"]}
+]

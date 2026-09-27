@@ -20,7 +20,8 @@
     "build:all": "npm run build && npm run build:server",
     "start": "node --env-file-if-exists=.env server-dist/index.mjs",
     "test:server": "vitest run tests/server",
-    "typecheck:server": "tsc -p tsconfig.automation.json --noEmit"
+    "typecheck:server": "tsc -p tsconfig.automation.json --noEmit",
+    "eval:context": "node scripts/evaluate-context.mjs"
   },
   "dependencies": {
     "@octokit/rest": "21.1.1",

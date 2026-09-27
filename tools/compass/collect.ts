@@ -14,6 +14,7 @@
  *   must never be silently substituted in tests.
  */
 
+import { selectChangedContext } from './context-selection.js'
 import type { SourceRecord } from '../../src/types/ContextBrief.js'
 
 // ---------------------------------------------------------------------------
@@ -324,23 +325,16 @@ export async function collect(
       if (!content || content.type !== 'file' || !content.content) continue
 
       const raw = decodeBase64(content.content)
-      const { text: snippet, truncated } = truncateBytes(raw, LIMITS.MAX_SNIPPET_BYTES)
-      if (truncated) {
-        omissions.push(`Source content for ${file.filename} was truncated.`)
+      const selection = selectChangedContext(raw, file.patch,
+        Math.min(LIMITS.MAX_SNIPPET_BYTES, LIMITS.MAX_TOTAL_BYTES - totalBytes))
+      if (selection.partial) omissions.push(`Source content for ${file.filename} was truncated to changed-line neighborhoods; other code is omitted.`)
+      for (const chunk of selection.selected) {
+        totalBytes += Buffer.byteLength(chunk.text, 'utf8')
+        sources.push({ id: nextId('src'), kind: 'code', repository, commitSha: headSha,
+          path: file.filename, lines: `${chunk.start}-${chunk.end}`,
+          url: `https://github.com/${repository}/blob/${headSha}/${file.filename}#L${chunk.start}-L${chunk.end}`,
+          snippet: chunk.text })
       }
-      totalBytes += Buffer.byteLength(snippet, 'utf8')
-
-      const url = `https://github.com/${repository}/blob/${headSha}/${file.filename}`
-      sources.push({
-        id: nextId('src'),
-        kind: 'code',
-        repository,
-        commitSha: headSha,
-        path: file.filename,
-        lines: null,
-        url,
-        snippet,
-      })
     } catch {
       omissions.push(`Could not fetch content for ${file.filename}.`)
     }

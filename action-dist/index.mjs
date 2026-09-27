@@ -129,6 +129,37 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// tools/compass/context-selection.ts
+function selectChangedContext(raw, patch, maxBytes, radius = 12) {
+  const lines = raw.split("\n");
+  const starts = [...(patch ?? "").matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)];
+  const ranges = starts.map((m) => {
+    const start = Math.min(lines.length, Math.max(1, Number(m[1])));
+    return [Math.max(1, start - radius), Math.min(lines.length, start + Math.max(1, Number(m[2] ?? 1)) - 1 + radius)];
+  }).sort((a, b) => a[0] - b[0]);
+  if (!ranges.length) ranges.push([1, Math.min(lines.length, 2 * radius + 1)]);
+  const merged = [];
+  for (const range of ranges) {
+    const previous = merged.at(-1);
+    if (previous && range[0] <= previous[1] + 1) previous[1] = Math.max(previous[1], range[1]);
+    else merged.push([...range]);
+  }
+  const selected = [];
+  let used = 0;
+  for (const [start, end] of merged) {
+    const kept = [];
+    for (let n = start; n <= end; n++) {
+      const text = lines[n - 1];
+      const bytes = Buffer.byteLength(text + (kept.length ? "\n" : ""));
+      if (used + bytes > maxBytes) break;
+      kept.push(text);
+      used += bytes;
+    }
+    if (kept.length) selected.push({ start, end: start + kept.length - 1, text: kept.join("\n") });
+  }
+  return { selected, partial: selected.reduce((n, s) => n + s.end - s.start + 1, 0) < lines.length };
+}
+
 // tools/compass/collect.ts
 var LIMITS = {
   MAX_FILES: 20,
@@ -292,22 +323,25 @@ async function collect(provider, owner, repo, prNumber, policy = {}) {
       const content = await provider.getContent(owner, repo, file.filename, headSha);
       if (!content || content.type !== "file" || !content.content) continue;
       const raw = decodeBase64(content.content);
-      const { text: snippet, truncated } = truncateBytes(raw, LIMITS.MAX_SNIPPET_BYTES);
-      if (truncated) {
-        omissions.push(`Source content for ${file.filename} was truncated.`);
+      const selection = selectChangedContext(
+        raw,
+        file.patch,
+        Math.min(LIMITS.MAX_SNIPPET_BYTES, LIMITS.MAX_TOTAL_BYTES - totalBytes)
+      );
+      if (selection.partial) omissions.push(`Source content for ${file.filename} was truncated to changed-line neighborhoods; other code is omitted.`);
+      for (const chunk of selection.selected) {
+        totalBytes += Buffer.byteLength(chunk.text, "utf8");
+        sources.push({
+          id: nextId("src"),
+          kind: "code",
+          repository,
+          commitSha: headSha,
+          path: file.filename,
+          lines: `${chunk.start}-${chunk.end}`,
+          url: `https://github.com/${repository}/blob/${headSha}/${file.filename}#L${chunk.start}-L${chunk.end}`,
+          snippet: chunk.text
+        });
       }
-      totalBytes += Buffer.byteLength(snippet, "utf8");
-      const url = `https://github.com/${repository}/blob/${headSha}/${file.filename}`;
-      sources.push({
-        id: nextId("src"),
-        kind: "code",
-        repository,
-        commitSha: headSha,
-        path: file.filename,
-        lines: null,
-        url,
-        snippet
-      });
     } catch {
       omissions.push(`Could not fetch content for ${file.filename}.`);
     }
@@ -4650,9 +4684,14 @@ var SourceRecordSchema = external_exports.object({
   /** Truncated content snippet included in the analysis bundle. */
   snippet: external_exports.union([external_exports.string(), external_exports.null()])
 });
+var ClaimEvidenceSchema = external_exports.object({
+  sourceId: external_exports.string().min(1),
+  quote: external_exports.string().min(8).max(500)
+}).strict();
 var PurposeSchema = external_exports.object({
   /** One-sentence summary, ≤300 chars */
   summary: external_exports.string().max(300),
+  evidence: external_exports.array(ClaimEvidenceSchema).min(1).max(3).optional(),
   basis: EvidenceBasisSchema,
   /**
    * Source ID of the PR body / title passage that supports this summary.
@@ -4663,6 +4702,7 @@ var PurposeSchema = external_exports.object({
 var RelevantContextSchema = external_exports.object({
   /** Short statement, ≤150 chars */
   statement: external_exports.string().max(150),
+  evidence: external_exports.array(ClaimEvidenceSchema).min(1).max(3).optional(),
   basis: EvidenceBasisSchema,
   /** Source IDs supporting this statement (1–3) */
   sourceIds: external_exports.array(external_exports.string()).min(1).max(3)
@@ -4773,6 +4813,19 @@ function assembleBrief(output, collection, compassVersion) {
       reason: `Model cited unknown source IDs: ${invalidIds.join(", ")}`
     };
   }
+  const claims = [
+    ...output.purpose ? [{ evidence: output.purpose.evidence, ids: output.purpose.sourceId ? [output.purpose.sourceId] : [] }] : [],
+    ...output.relevantContext.map((c) => ({ evidence: c.evidence, ids: c.sourceIds }))
+  ];
+  for (const claim of claims) {
+    for (const evidence of claim.evidence ?? []) {
+      const source = collection.sources.find((s) => s.id === evidence.sourceId);
+      if (!claim.ids.includes(evidence.sourceId) || !source?.snippet?.includes(evidence.quote)) {
+        return { ok: false, reason: "Claim evidence does not match its cited collected source." };
+      }
+    }
+  }
+  const missingEvidence = claims.filter((c) => c.ids.length > 0 && !c.evidence?.length).length;
   let { status } = output;
   if (status === "ok") {
     const hasMeaningfulContent = output.purpose !== null && output.purpose.summary.trim().length > 0 && output.readingOrder.length > 0;
@@ -4803,7 +4856,8 @@ function assembleBrief(output, collection, compassVersion) {
     // Collector omissions are preserved and merged with model-reported limitations
     limitations: [
       ...collection.omissions,
-      ...output.limitations
+      ...output.limitations,
+      ...missingEvidence ? [`${missingEvidence} claim(s) lack exact supporting excerpts; citation IDs alone do not establish support.`] : []
     ],
     unavailableReason: output.unavailableReason
   };

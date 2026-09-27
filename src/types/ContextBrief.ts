@@ -76,9 +76,15 @@ export type SourceRecord = z.infer<typeof SourceRecordSchema>
 // Purpose — what the author says the change is intended to accomplish
 // ---------------------------------------------------------------------------
 
+export const ClaimEvidenceSchema = z.object({
+  sourceId: z.string().min(1),
+  quote: z.string().min(8).max(500),
+}).strict()
+
 export const PurposeSchema = z.object({
   /** One-sentence summary, ≤300 chars */
   summary: z.string().max(300),
+  evidence: z.array(ClaimEvidenceSchema).min(1).max(3).optional(),
   basis: EvidenceBasisSchema,
   /**
    * Source ID of the PR body / title passage that supports this summary.
@@ -95,6 +101,7 @@ export type Purpose = z.infer<typeof PurposeSchema>
 export const RelevantContextSchema = z.object({
   /** Short statement, ≤150 chars */
   statement: z.string().max(150),
+  evidence: z.array(ClaimEvidenceSchema).min(1).max(3).optional(),
   basis: EvidenceBasisSchema,
   /** Source IDs supporting this statement (1–3) */
   sourceIds: z.array(z.string()).min(1).max(3),

@@ -63,6 +63,22 @@ export function assembleBrief(
     }
   }
 
+  // Exact excerpt checks prove provenance, not semantic entailment.
+  const claims = [
+    ...(output.purpose ? [{ evidence: output.purpose.evidence, ids: output.purpose.sourceId ? [output.purpose.sourceId] : [] }] : []),
+    ...output.relevantContext.map(c => ({ evidence: c.evidence, ids: c.sourceIds })),
+  ]
+  for (const claim of claims) {
+    for (const evidence of claim.evidence ?? []) {
+      const source = collection.sources.find(s => s.id === evidence.sourceId)
+      if (!claim.ids.includes(evidence.sourceId) || !source?.snippet?.includes(evidence.quote)) {
+        return { ok: false, reason: 'Claim evidence does not match its cited collected source.' }
+      }
+    }
+  }
+
+  const missingEvidence = claims.filter(c => c.ids.length > 0 && !c.evidence?.length).length
+
   // Determine effective status: downgrade 'ok' to 'partial' or 'unavailable'
   // when the model provided no meaningful content.
   let { status } = output
@@ -100,6 +116,7 @@ export function assembleBrief(
     limitations: [
       ...collection.omissions,
       ...output.limitations,
+      ...(missingEvidence ? [`${missingEvidence} claim(s) lack exact supporting excerpts; citation IDs alone do not establish support.`] : []),
     ],
     unavailableReason: output.unavailableReason,
   }

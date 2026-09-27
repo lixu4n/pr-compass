@@ -339,13 +339,13 @@ describe('Collection limitations survive assembly', () => {
     }
   })
 
-  it('assembleBrief preserves an empty limitations array when both are empty', () => {
+  it('assembleBrief discloses missing excerpts even without other limitations', () => {
     const output = makeModelOutput({ limitations: [] })
     const collection = makeCollection({ omissions: [] })
     const result = assembleBrief(output, collection, '0.1.0')
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.brief.limitations).toEqual([])
+      expect(result.brief.limitations).toEqual(['2 claim(s) lack exact supporting excerpts; citation IDs alone do not establish support.'])
     }
   })
 })

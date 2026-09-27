@@ -106,3 +106,15 @@ Before answering, check all required fields, especially purpose.summary and EACH
 relevantContext item's basis. Keep sentences comfortably below the character limits.
 Cite only supplied IDs. Do not provide fixes, risk scores, execution claims, or an
 approval verdict. Return only the JSON object for this PR, not these examples.
+
+## Evidence and relevance requirements
+For purpose and each relevantContext item, include an `evidence` array of
+`{ "sourceId": "...", "quote": "exact excerpt from that source snippet" }`.
+Each quote must be 8–500 characters and appear verbatim in the supplied snippet.
+Use only IDs also cited by that claim. For unknown purpose with no source, omit evidence.
+Quotes establish traceability, not certainty. Do not treat a README claim as proof
+of runtime behavior. Distinguish manual workflows from automatic workflows. A
+requested cost limit is not a verified billing cap. Do not claim complete caller
+coverage. Return zero relevantContext items if none adds necessary information.
+Avoid repeating the purpose in context bullets. Every reading location must have
+a distinct reason to inspect it. Do not pad the response to reach three items.
