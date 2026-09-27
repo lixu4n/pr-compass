@@ -12,6 +12,8 @@ export const SUPPORTED_BOB_VERSION = '2.0.5'
 export const DISABLED_TOOL_GROUPS = 'read,edit,execute,mcp,skill,todo,subagent,mode'
 
 export interface BobRuntimeConfig {
+  /** Experimental: evidence-only native explore delegation; callers must inspect stream events. */
+  nativeExplore?: boolean
   bobPath: string
   /** Per-request credential for the hosted app; never mutate process.env across users. */
   apiKey?: string
@@ -54,10 +56,10 @@ export function restrictedArgs(workspace: string, config: BobRuntimeConfig): str
     throw new Error('Bob license acceptance requires explicit permission (COMPASS_ACCEPT_BOB_LICENSE=true).')
   }
   return [
-    'run', '--format', 'json', '--mode', 'ask',
+    'run', '--format', config.nativeExplore ? 'stream-json' : 'json', '--mode', 'ask',
     '--workspace', workspace,
-    '--disable-mcp', '--disable-subagents',
-    '--disable-tool-groups', DISABLED_TOOL_GROUPS,
+    '--disable-mcp', ...(config.nativeExplore ? [] : ['--disable-subagents']),
+    '--disable-tool-groups', config.nativeExplore ? 'read,edit,execute,mcp,skill,todo,mode' : DISABLED_TOOL_GROUPS,
     '--max-cost', String(limits.maxCost),
     '--max-turns', String(limits.maxTurns),
     '--log-level', 'error', '--accept-license',

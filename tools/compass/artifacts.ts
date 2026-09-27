@@ -1,9 +1,11 @@
 /** Persist an inspectable result before any optional GitHub write. */
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import type { OrchestrationTrace } from './orchestration.js'
+import { collectCitedIds } from '../../src/types/ContextBrief.js'
 import type { ContextBrief } from '../../src/types/ContextBrief.js'
 
-export async function saveArtifacts(brief: ContextBrief, markdown: string, outputRoot: string) {
+export async function saveArtifacts(brief: ContextBrief, markdown: string, outputRoot: string, orchestration?: OrchestrationTrace) {
   const repository = brief.provenance.repository
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ||
       repository.split('/').some((part) => part === '.' || part === '..' || part.length > 100) ||
@@ -19,5 +21,10 @@ export async function saveArtifacts(brief: ContextBrief, markdown: string, outpu
   const markdownPath = join(directory, 'context-comment.md')
   await writeFile(jsonPath, JSON.stringify(brief, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
   await writeFile(markdownPath, markdown, { encoding: 'utf8', mode: 0o600 })
-  return { directory, jsonPath, markdownPath }
+  const tracePath = orchestration ? join(directory, 'orchestration-trace.json') : undefined
+  if (tracePath) await writeFile(tracePath, JSON.stringify({
+    mode:orchestration?.nativeDelegation ? 'bob-native-explore' : 'bob-multi-role', ...orchestration, sourceIdsUsed:[...new Set(collectCitedIds(brief))],
+    actualUsage:null, billingNote:'Requested allowances are not verified billed costs.',
+  }, null, 2) + '\n', { encoding:'utf8', mode:0o600 })
+  return { directory, jsonPath, markdownPath, tracePath }
 }

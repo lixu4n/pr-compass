@@ -26,12 +26,14 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { collect } from './collect.js'
+import { collect, shouldSkip } from './collect.js'
 import { analyzeWithModel } from '../server/models.js'
 import { ActionProgress } from './progress.js'
 import type { AnalyzeResult } from './analyze.js'
 let progress: ActionProgress | undefined
 import { analyze, LiveBobProvider, redactSecrets } from './analyze.js'
+import { nativeExploreAgents, type NativeDelegationTrace } from './native-explore.js'
+import { orchestrate, restrictedBobAgents, type OrchestrationTrace } from './orchestration.js'
 import { runtimeLimits } from './bob-runtime.js'
 import { validateBrief } from './validate.js'
 import { render } from './render.js'
@@ -136,6 +138,15 @@ async function main(): Promise<void> {
   const bobPath = getEnv('BOB_PATH', 'bob')
   const providerName = getEnv('COMPASS_PROVIDER', 'bob')
   if (!['bob', 'openai'].includes(providerName)) throw new Error('Unsupported model provider.')
+  const analysisMode = getEnv('COMPASS_ANALYSIS_MODE', 'single')
+  if (!['single', 'bob-multi-role', 'bob-native-explore'].includes(analysisMode)) throw new Error('Unsupported analysis mode.')
+  if (analysisMode !== 'single' && (providerName !== 'bob' || allowRepair)) {
+    throw new Error('bob-multi-role requires the Bob provider and repair disabled.')
+  }
+  if (analysisMode !== 'single' && (!acceptLicense || !process.env.BOB_API_KEY?.trim())) {
+    throw new Error('bob-multi-role requires explicit Bob license consent and BOB_API_KEY.')
+  }
+  if (analysisMode === 'bob-native-explore' && !dryRun) throw new Error('Native exploration is dry-run only until live verification.')
   const allowPrivate = getBoolean('COMPASS_ALLOW_PRIVATE')
   const maxOutputTokens = Number(getEnv('COMPASS_MAX_OUTPUT_TOKENS', '2048'))
   const model = getEnv('COMPASS_MODEL', 'gpt-4.1-mini')
@@ -191,6 +202,10 @@ async function main(): Promise<void> {
   console.log('Compass: analyzing context')
   await progress?.update('Analyzing context')
   let analyzeResult: AnalyzeResult
+  const nativeTrace: NativeDelegationTrace | undefined = analysisMode === 'bob-native-explore' ?
+    {requested:3, observed:0, completed:0, verified:false, sessionCostReported:null} : undefined
+  let stopPublication = false
+  let orchestrationTrace: OrchestrationTrace | undefined
   if (providerName === 'openai') {
     try {
       const result = await analyzeWithModel(collection, trustedInstructions, {
@@ -202,6 +217,30 @@ async function main(): Promise<void> {
       console.log(`Compass: provider token usage ${JSON.stringify(result.usage)}; actual cost is available from your provider.`)
     } catch {
       analyzeResult = { ok: false, reason: 'OpenAI analysis failed. Check model access, credentials, credits, and output limits. No automatic retry was made.' }
+    }
+  } else if (analysisMode !== 'single') {
+    const controller = new AbortController()
+    const cancel = () => { stopPublication = true; controller.abort() }
+    process.once('SIGINT', cancel)
+    process.once('SIGTERM', cancel)
+    try {
+      const result = await orchestrate(collection, trustedInstructions, gitHubProvider,
+        (nativeTrace ? nativeExploreAgents({ bobPath, ...limits, acceptLicense }, nativeTrace) :
+          restrictedBobAgents({ bobPath, ...limits, acceptLicense })), limits.maxCost, {
+          signal: controller.signal,
+          check: async () => {
+            const current = await gitHubProvider.getPullRequest(owner, repo, prNumber)
+            const eligible = !shouldSkip(current, { allowPrivate }) && current.base.repo.full_name.toLowerCase() === collection.repository.toLowerCase() &&
+              current.head.sha === collection.headSha && current.base.sha === collection.baseSha
+            if (!eligible) stopPublication = true
+            return eligible
+          },
+        })
+      analyzeResult = result
+      orchestrationTrace = { trace:result.trace, retrieval:result.retrieval, ...(nativeTrace ? {nativeDelegation:nativeTrace} : {}) }
+    } finally {
+      process.removeListener('SIGINT', cancel)
+      process.removeListener('SIGTERM', cancel)
     }
   } else {
     analyzeResult = await analyze(collection, trustedInstructions, { bobPath, ...limits, allowRepair, acceptLicense }, new LiveBobProvider())
@@ -225,12 +264,12 @@ async function main(): Promise<void> {
   const commentBody = render(brief)
   const outputRoot = getEnv('COMPASS_OUTPUT_DIR',
     path.join(process.env.GITHUB_WORKSPACE ?? process.cwd(), 'compass-output'))
-  const artifacts = await saveArtifacts(brief, commentBody, outputRoot)
+  const artifacts = await saveArtifacts(brief, commentBody, outputRoot, orchestrationTrace)
   console.log(`Compass: JSON saved to ${artifacts.jsonPath}`)
   console.log(`Compass: Markdown saved to ${artifacts.markdownPath}`)
 
   let outcome = 'dry-run (no GitHub writes)'
-  if (publishProvider) {
+  if (publishProvider && !stopPublication) {
     console.log('Compass: posting comment')
     await progress?.update('Posting comment')
     const result = await publish(publishProvider, {

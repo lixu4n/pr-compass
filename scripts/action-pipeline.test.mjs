@@ -21,12 +21,19 @@ async function exercise(scenario, publish = false) {
     await mkdir(home)
     await mkdir(cwd)
     const bob = join(root, 'fake-bob')
+    const callsPath = join(root, 'calls.jsonl')
+    const native = scenario.startsWith('native')
+    const multi = scenario.startsWith('multi') || native
     const requestsPath = join(root, 'requests.jsonl')
     const prompt = {
       status: 'ok', purpose: { summary: 'Synthetic test: explain a renamed helper.', basis: 'declared', sourceId: 'pr-1' },
       relevantContext: [{ statement: 'The changed helper returns a value.', basis: 'inferred', sourceIds: ['src-3'] }],
       readingOrder: [{ order: 1, label: 'src/example.ts', reason: 'Start with the changed helper.', sourceId: 'src-3' }],
       limitations: [], unavailableReason: null,
+    }
+    if (multi) {
+      prompt.purpose.evidence = [{sourceId:'pr-1',quote:'Rename an example helper.'}]
+      prompt.relevantContext[0].evidence = [{sourceId:'src-3',quote:'export const newName = 1'}]
     }
     await writeFile(bob, `#!${process.execPath}
 const args = process.argv.slice(2);
@@ -36,15 +43,29 @@ if (args[1] === '--help') {
   process.exit(0);
 }
 if (args[0] !== 'run' || !args.includes('--disable-tool-groups')) process.exit(2);
-process.stdin.resume();
-process.stdin.on('end', () => console.log(JSON.stringify(${JSON.stringify({
-      type: 'result', status: scenario === 'unavailable' ? 'error' : 'success', last_message: JSON.stringify(prompt),
-    })})));
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => input += chunk);
+process.stdin.on('end', () => {
+  const fs = require('node:fs');
+  const role = input.includes('INVESTIGATOR OUTPUT CONTRACT') ? 'investigator' : input.includes('CHECKER OUTPUT CONTRACT') ? 'reviewer' : 'writer';
+  fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({role,cost:Number(args[args.indexOf('--max-cost')+1])})+'\\n');
+  let result = ${JSON.stringify(prompt)};
+  if (${multi} && role === 'investigator') result = {requests:[{path:'.github/workflows/test.yml',reason:'Check automation'}]};
+  if (${multi} && role === 'reviewer') result = ${JSON.stringify(scenario === 'multi-reject' ? {verdict:'insufficient_evidence',findings:[{statementId:'purpose',explanation:'Unclear intent',sourceIds:[]}]} : {verdict:'supported',findings:[]})};
+  if (${native} && role === 'investigator' && ${JSON.stringify(scenario)} !== 'native-missing') {
+    for (let i=0;i<3;i++) {
+      console.log(JSON.stringify({type:'tool_use',tool_name:'spawn_subagent',tool_id:String(i),parameters:{name:'explore'}}));
+      console.log(JSON.stringify({type:'tool_result',tool_id:String(i),status:'success'}));
+    }
+  }
+  console.log(JSON.stringify({type:'result',status:${JSON.stringify(scenario === 'unavailable' ? 'error' : 'success')},last_message:JSON.stringify(result)}));
+});
 `, { mode: 0o700 })
 
     const hook = join(root, 'fake-services.mjs')
     await writeFile(hook, `
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 import cp from 'node:child_process';
 import net from 'node:net';
 import tls from 'node:tls';
@@ -77,6 +98,7 @@ globalThis.fetch = async (input, init) => {
   if (url.origin !== 'https://api.github.com') return forbidden();
   if (method === 'POST' && url.pathname === root + '/check-runs') return json({id:55},201);
   if (method === 'PATCH' && url.pathname === root + '/check-runs/55') return json({id:55});
+  if (${JSON.stringify(scenario)} === 'multi-stale' && existsSync(${JSON.stringify(callsPath)})) head = 'c'.repeat(40);
   if (method === 'GET' && url.pathname === root + '/pulls/42') return json({
     number:42,title:'Synthetic integration PR',body:'Rename an example helper.',state:'open',draft:false,
     user:{login:'synthetic-author',type:'User'},html_url:'https://github.com/owner/repo/pull/42',
@@ -92,6 +114,10 @@ globalThis.fetch = async (input, init) => {
   if (method === 'GET' && decodeURIComponent(url.pathname) === root + '/contents/src/example.ts') return json({
     type:'file',content:Buffer.from('export const newName = 1').toString('base64'),encoding:'base64',size:24,sha:head,html_url:null
   });
+  if (method === 'GET' && decodeURIComponent(url.pathname) === root + '/contents/.github/workflows/test.yml') {
+    if (url.searchParams.get('ref') !== head) return forbidden();
+    return json({type:'file',content:Buffer.from('on: workflow_dispatch').toString('base64'),encoding:'base64',size:21});
+  }
   if (method === 'GET' && url.pathname.startsWith(root + '/contents/')) return json({message:'Not Found'},404);
   if (method === 'GET' && url.pathname === root + '/issues/42/comments') {
     if (${JSON.stringify(scenario)} === 'stale') head = 'c'.repeat(40);
@@ -118,6 +144,9 @@ globalThis.fetch = async (input, init) => {
         INPUT_OWNER: 'owner', INPUT_REPO: 'repo', INPUT_PR_NUMBER: '42',
         GITHUB_ACTIONS: 'true', GITHUB_TOKEN: 'synthetic-actions-token',
         BOB_API_KEY: 'synthetic-test-key', BOB_PATH: bob,
+        ...(multi ? {COMPASS_ANALYSIS_MODE:native?'bob-native-explore':'bob-multi-role'} : {}),
+        ...(scenario === 'multi-wrong-provider' ? {COMPASS_PROVIDER:'openai'} : {}),
+        ...(scenario === 'multi-repair' ? {COMPASS_ALLOW_REPAIR:'true'} : {}),
         COMPASS_ACCEPT_BOB_LICENSE: 'true', COMPASS_OUTPUT_DIR: outputDir,
         ...(scenario === 'openai' ? {COMPASS_APP_SLUG:'compass-by-north',COMPASS_PROVIDER:'openai',OPENAI_API_KEY:'synthetic-openai-key',COMPASS_PROGRESS:'true',COMPASS_HEAD_SHA:HEAD} : {}),
         // Omitting the flag exercises the safer default dry-run behavior.
@@ -127,12 +156,19 @@ globalThis.fetch = async (input, init) => {
     })
     assert.ifError(run.error)
     assert.doesNotMatch(run.stderr, /Unexpected network or subprocess/)
-    const requests = (await readFile(requestsPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+    const requests = (await readFile(requestsPath, 'utf8').catch(()=>'' )).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    if (['multi-wrong-provider','multi-repair'].includes(scenario)) {
+      assert.equal(run.status,1);assert.equal(requests.length,0)
+      assert.equal(await readFile(callsPath,'utf8').catch(()=>''),'')
+      return {run,requests}
+    }
     const folders = await readdir(outputDir)
     assert.equal(folders.length, 1)
     const brief = JSON.parse(await readFile(join(outputDir, folders[0], 'context-brief.json'), 'utf8'))
     const markdown = await readFile(join(outputDir, folders[0], 'context-comment.md'), 'utf8')
-    return { run, requests, brief, markdown }
+    const calls = (await readFile(callsPath,'utf8').catch(()=>'' )).trim().split('\n').filter(Boolean).map(JSON.parse)
+    const trace = multi ? JSON.parse(await readFile(join(outputDir,folders[0],'orchestration-trace.json'),'utf8')) : null
+    return { run, requests, brief, markdown, calls, trace }
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -188,4 +224,45 @@ test('packaged failed analysis produces unavailable output and a failed job, not
   assert.equal(checks.at(-1).body.conclusion, 'success')
   assert.equal(requests.filter(r => r.method === 'POST' && r.path.endsWith('/comments')).length, 0)
   assert.equal(requests.filter(r => r.method === 'PATCH' && r.path.endsWith('/comments/71')).length, 1)
+})
+
+test('packaged opt-in runs three restricted roles and publishes one context comment',async()=>{
+ const {run,requests,brief,calls,trace}=await exercise('multi',true)
+ assert.equal(run.status,0,run.stderr);assert.equal(brief.status,'ok')
+ assert.deepEqual(calls.map(c=>c.role),['investigator','writer','reviewer'])
+ assert.deepEqual(calls.map(c=>c.cost),[0.1,0.3,0.1])
+ assert.equal(trace.trace.length,3);assert.ok(trace.trace.every(t=>t.outcome==='validated' && t.actualUsage===null))
+ assert.equal(trace.retrieval[0].outcome,'collected at analyzed head')
+ assert.equal(requests.filter(r=>r.method==='POST').length,1)
+ assert.ok(!requests.some(r=>r.path.includes('/reviews')))
+})
+test('packaged checker uncertainty publishes only honest unavailable output',async()=>{
+ const {run,requests,brief,calls}=await exercise('multi-reject',true)
+ assert.equal(run.status,1);assert.equal(brief.status,'unavailable');assert.equal(calls.length,3)
+ const comments=requests.filter(r=>r.method==='POST')
+ assert.equal(comments.length,1);assert.match(comments[0].body.body,/Context brief unavailable/)
+ assert.doesNotMatch(comments[0].body.body,/Synthetic test: explain/)
+})
+
+test('packaged snapshot change after investigator stops spending and publication',async()=>{
+ const {run,requests,brief,calls}=await exercise('multi-stale',true)
+ assert.equal(run.status,1);assert.equal(brief.status,'unavailable')
+ assert.equal(calls.length,1);assert.ok(requests.every(r=>r.method==='GET'))
+})
+for (const scenario of ['multi-wrong-provider','multi-repair']) test(`packaged ${scenario} fails before external work`,async()=>{
+ const {run}=await exercise(scenario)
+ assert.match(run.stderr,/requires the Bob provider and repair disabled/)
+})
+
+test('packaged native dry-run records actual delegation events and never publishes',async()=>{
+ const {run,requests,brief,calls,trace}=await exercise('native')
+ assert.equal(run.status,0,run.stderr);assert.equal(brief.status,'ok')
+ assert.equal(calls.length,3);assert.equal(trace.mode,'bob-native-explore')
+ assert.equal(trace.nativeDelegation.verified,true);assert.equal(trace.nativeDelegation.completed,3)
+ assert.ok(requests.every(r=>r.method==='GET'))
+})
+test('packaged native mode stops if delegation events are absent',async()=>{
+ const {run,brief,calls,trace}=await exercise('native-missing')
+ assert.equal(run.status,1);assert.equal(brief.status,'unavailable');assert.equal(calls.length,1)
+ assert.equal(trace.nativeDelegation.verified,false)
 })

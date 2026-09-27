@@ -31,6 +31,9 @@ inputs:
   provider:
     description: 'Model provider: bob or openai'
     default: 'bob'
+  analysis_mode:
+    description: 'single (default), bob-multi-role, or bob-native-explore (dry-run only); experimental modes require Bob and repair disabled'
+    default: 'single'
   openai_api_key:
     description: 'OpenAI API key from a repository secret'
     default: ''
@@ -104,6 +107,7 @@ runs:
         COMPASS_APP_SLUG: ${{ inputs.app_slug }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         BOB_API_KEY: ${{ inputs.bob_api_key }}
+        COMPASS_ANALYSIS_MODE: ${{ inputs.analysis_mode }}
         COMPASS_PROVIDER: ${{ inputs.provider }}
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
         COMPASS_MODEL: ${{ inputs.model }}
