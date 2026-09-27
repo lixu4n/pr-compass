@@ -30,6 +30,54 @@ without their own App configuration, it posts as `github-actions[bot]`.
 Installing the public Compass App alone does not enable reviews. Never distribute
 Compass's private key. See [external-user setup](docs/EXTERNAL-USERS.md).
 
+## Architecture
+
+Compass runs in GitHub Actions and posts source-linked context for human PR review. The public website provides a demo and setup guide.
+
+```mermaid
+flowchart TD
+    Website["Compass website<br/>Demo + setup guide"]
+    Setup["Repository setup<br/>Workflow + model secret + opt-in variables"]
+    PR["Eligible PR opened or updated"]
+    Actions["GitHub Actions<br/>Run pinned Compass code"]
+
+    Website -->|"User configures GitHub"| Setup
+    Setup --> Actions
+    PR --> Actions
+
+    Actions --> Collect["Collect bounded context<br/>PR description, diff, selected code and docs"]
+    Collect --> Model["Analyze with IBM Bob or OpenAI"]
+    Model --> Validate["Validate structure, limits<br/>and source references"]
+
+    Validate -->|"Valid"| Brief["Render context brief"]
+    Validate -->|"Invalid"| Unavailable["Render unavailable result"]
+
+    Brief --> Artifacts["Save JSON + Markdown"]
+    Unavailable --> Artifacts
+    Artifacts -->|"Publication enabled"| Freshness["Recheck PR eligibility<br/>and commit freshness"]
+    Freshness --> Comment["Create or update<br/>the bot-owned PR comment"]
+    Comment --> Human["Human reviews the brief<br/>and follows source links"]
+```
+
+### Current scope
+
+- **Verified:** live Bob analysis, North App publication, automatic PR triggers, and updates to the same comment.
+- **Authentication:** the standard GitHub Actions token posts as `github-actions[bot]`; a configured GitHub App token posts as that app, including its avatar.
+- **Model access:** users supply their own provider key through GitHub Secrets. Selected repository context is sent to that provider.
+- **Boundaries:** Compass does not execute target PR code, approve reviews, merge PRs, or edit source files. Collection is bounded, and validation does not guarantee factual accuracy.
+- **Not yet deployed:** hosted GitHub sign-in, model connection, and installation-only onboarding. Installing the public Compass App alone does not activate reviews.
+- **Separate viewer:** the original React viewer reads static `ReviewBrief` data; the automation produces `ContextBrief` JSON and Markdown.
+
+See [live verification](docs/LIVE-VERIFICATION.md) for evidence and known limitations, and [external-user setup](docs/EXTERNAL-USERS.md) for installation instructions.
+
+
+
+
+
+
+
+
+
 ## Controlled demo
 
 `.github/workflows/compass-manual.yml` is manual only. It targets this repository's
