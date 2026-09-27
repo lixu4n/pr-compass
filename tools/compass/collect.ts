@@ -126,9 +126,9 @@ export interface SkipReason {
   reason: string
 }
 
-export function shouldSkip(pr: PullRequest): SkipReason | null {
+export function shouldSkip(pr: PullRequest, policy: { allowPrivate?: boolean } = {}): SkipReason | null {
   if (pr.state !== 'open') return { skip: true, reason: 'PR is no longer open.' }
-  if (pr.base.repo.private) return { skip: true, reason: 'Private repositories are outside this public-demo MVP.' }
+  if (pr.base.repo.private && !policy.allowPrivate) return { skip: true, reason: 'Private repositories are outside this public-demo MVP.' }
   if (!pr.head.repo) return { skip: true, reason: 'Head repository is unavailable.' }
   const headRepo = pr.head.repo.full_name
   const baseRepo = pr.base.repo.full_name
@@ -200,6 +200,7 @@ export async function collect(
   owner: string,
   repo: string,
   prNumber: number,
+  policy: { allowPrivate?: boolean } = {},
 ): Promise<CollectionResult | SkipReason> {
   resetIdCounter()
 
@@ -211,7 +212,7 @@ export async function collect(
   // 1. Fetch PR metadata
   const pr = await provider.getPullRequest(owner, repo, prNumber)
 
-  const skipCheck = shouldSkip(pr)
+  const skipCheck = shouldSkip(pr, policy)
   if (skipCheck) return skipCheck
 
   const headSha = pr.head.sha

@@ -1,0 +1,31 @@
+# Paid service + persistent disk. Review Render's current prices before creating.
+# Deploy one replica only; SQLite's exclusive lock prevents duplicate workers.
+services:
+  - type: web
+    name: pr-compass
+    runtime: docker
+    plan: starter
+    branch: feat/compass-automation
+    healthCheckPath: /healthz
+    autoDeployTrigger: off
+    disk:
+      name: compass-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: COMPASS_PUBLIC_URL
+        sync: false
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_SLUG
+        sync: false
+      - key: GITHUB_APP_CLIENT_ID
+        sync: false
+      - key: GITHUB_APP_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_APP_PRIVATE_KEY_FILE
+        value: /etc/secrets/github-app.pem
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: COMPASS_ENCRYPTION_KEY
+        sync: false

@@ -45,6 +45,8 @@ export interface PublishOptions {
   analyzedBaseSha?: string
   /** No publisher API calls. Upstream analysis can still cost Bobcoins. */
   dryRun?: boolean
+  /** Hosted app only: repository administrator explicitly consented to private-code processing. */
+  allowPrivate?: boolean
 }
 
 export type PublishResult =
@@ -83,7 +85,7 @@ function invalidState(state: PublicationState, options: PublishOptions): string 
   const expectedRepository = `${options.owner}/${options.repo}`.toLowerCase()
   if (state.state !== 'open') return 'PR is no longer open.'
   if (state.draft) return 'PR is a draft; skipping publication.'
-  if (state.isPrivate) return 'Private repositories are outside this public-demo MVP.'
+  if (state.isPrivate && !options.allowPrivate) return 'Private repositories are outside this public-demo MVP.'
   if (state.authorIsBot) return 'Bot-authored PRs are skipped.'
   if (
     !state.headRepository || state.baseRepository.toLowerCase() !== expectedRepository ||

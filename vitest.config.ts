@@ -8,6 +8,7 @@ export default defineConfig({
     // automation tests run in node; everything else in jsdom
     environmentMatchGlobs: [
       ['tests/automation/**', 'node'],
+      ['tests/server/**', 'node'],
     ],
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],

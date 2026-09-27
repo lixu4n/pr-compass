@@ -1,7 +1,7 @@
 name: 'Compass — PR Context Brief'
 description: >
   Generates a compact, evidence-linked context comment on a pull request
-  using IBM Bob Shell. Identifies what changes, where to look, and what
+  using IBM Bob Shell or OpenAI. Identifies what changes, where to look, and what
   context matters — without review verdicts or automatic approval.
 
 author: 'PR Compass team'
@@ -25,6 +25,27 @@ inputs:
       Standard GitHub Actions GITHUB_TOKEN with contents:read and pull-requests:write.
       PATs and custom App tokens are not supported for publication. Never hard-code.
     required: true
+  provider:
+    description: 'Model provider: bob or openai'
+    default: 'bob'
+  openai_api_key:
+    description: 'OpenAI API key from a repository secret'
+    default: ''
+  model:
+    description: 'OpenAI Responses-compatible model ID'
+    default: 'gpt-4.1-mini'
+  max_output_tokens:
+    description: 'OpenAI output token cap (256–4096), not a dollar budget'
+    default: '2048'
+  allow_private:
+    description: 'Explicit authorization to process private repository context'
+    default: 'false'
+  progress:
+    description: 'Write a Compass check (requires checks:write and head_sha)'
+    default: 'false'
+  head_sha:
+    description: 'Exact event PR head SHA for the progress check'
+    default: ''
   bob_api_key:
     description: >
       IBM Bob Shell API key (Inference scope). Set as a repository secret.
@@ -79,6 +100,13 @@ runs:
         INPUT_PR_NUMBER: ${{ inputs.pr_number }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         BOB_API_KEY: ${{ inputs.bob_api_key }}
+        COMPASS_PROVIDER: ${{ inputs.provider }}
+        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        COMPASS_MODEL: ${{ inputs.model }}
+        COMPASS_MAX_OUTPUT_TOKENS: ${{ inputs.max_output_tokens }}
+        COMPASS_ALLOW_PRIVATE: ${{ inputs.allow_private }}
+        COMPASS_PROGRESS: ${{ inputs.progress }}
+        COMPASS_HEAD_SHA: ${{ inputs.head_sha }}
         BOB_PATH: ${{ inputs.bob_path }}
         COMPASS_DRY_RUN: ${{ inputs.dry_run }}
         COMPASS_ALLOW_REPAIR: ${{ inputs.allow_repair }}

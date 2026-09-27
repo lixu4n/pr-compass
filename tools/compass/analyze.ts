@@ -134,7 +134,7 @@ const SECRET_PATTERNS = [
 
 export function redactSecrets(text: string): string {
   let result = text
-  for (const name of ['BOB_API_KEY', 'BOBSHELL_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN']) {
+  for (const name of ['BOB_API_KEY', 'BOBSHELL_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN', 'OPENAI_API_KEY']) {
     const value = process.env[name]
     if (value) result = result.split(value).join('[REDACTED]')
   }

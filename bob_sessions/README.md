@@ -24,3 +24,12 @@ When you complete a meaningful Bob IDE task related to PR Compass, save evidence
 - Screenshots of other tools (not Bob IDE).
 - Any file that was not produced in an actual Bob IDE session.
 - Fabricated or edited evidence.
+
+## Included evidence
+
+![Teammate one: actual Bob development session](teammate-one/2026-09-26-bob-analysis.png)
+
+Captured from the open Bob IDE conversation on 2026-09-26. Shows earlier sample
+analysis and tool calls; it is not PR #3 workflow or per-run cost evidence.
+
+![Teammate two: supplied contract repair session](teammate-two/teammate-two_task02_contract_repair.png)

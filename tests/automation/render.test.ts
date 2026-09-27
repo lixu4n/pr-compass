@@ -16,6 +16,7 @@ import {
   buildLink,
   assertWordCount,
   COMPASS_MARKER,
+  NORTH_IMAGE_URL,
 } from '../../tools/compass/render.js'
 import {
   makeOkBrief,
@@ -288,8 +289,8 @@ describe('render — escaping', () => {
     // Source links come only from SourceRecord.url — the model never supplies them
     // A reading location's sourceId must resolve to a collector-built SourceRecord
     const brief = makeOkBrief()
-    // Confirm no raw http strings appear other than those in known SourceRecords
-    const knownUrls = brief.sources.map((s) => s.url).filter(Boolean)
+    // Permit collector source URLs and the fixed trusted branding asset.
+    const knownUrls = [...brief.sources.map((s) => s.url).filter(Boolean), NORTH_IMAGE_URL]
     const output = render(brief)
     // All http(s) occurrences in output should match known collector-built URLs
     const foundUrls = [...output.matchAll(/https?:\/\/[^\s)]+/g)].map((m) => m[0])

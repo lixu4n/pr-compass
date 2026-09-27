@@ -42,3 +42,7 @@ npm-debug.log*
 # They reduce accidental exposure but do not prevent a determined reader
 # from accessing excluded files through other means. Use proper secrets
 # management for credentials and sensitive data.
+
+# Hosted Compass service state (encrypted credentials and sessions)
+.compass-data/
+server-dist/

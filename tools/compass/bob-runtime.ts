@@ -13,6 +13,8 @@ export const DISABLED_TOOL_GROUPS = 'read,edit,execute,mcp,skill,todo,subagent,m
 
 export interface BobRuntimeConfig {
   bobPath: string
+  /** Per-request credential for the hosted app; never mutate process.env across users. */
+  apiKey?: string
   /** Per invocation; analyze() splits a total analysis budget if repair is enabled. */
   maxCost?: number
   maxTurns?: number
@@ -160,7 +162,7 @@ export async function runRestrictedBob(prompt: string, config: BobRuntimeConfig)
   }
   // Check consent and limits before any subprocess is started.
   restrictedArgs('preflight', config)
-  const apiKey = process.env.BOB_API_KEY?.trim()
+  const apiKey = (config.apiKey ?? process.env.BOB_API_KEY)?.trim()
   if (!apiKey) throw new Error('BOB_API_KEY is not configured. No Bob analysis was started.')
   if (Buffer.byteLength(prompt, 'utf8') > limits.maxPromptBytes) {
     throw new Error('Bob input bundle exceeds the prompt-size limit.')

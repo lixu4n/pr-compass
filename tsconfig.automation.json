@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "resolveJsonModule": true,
@@ -17,6 +19,7 @@
   "include": [
     "tools/**/*.ts",
     "tests/automation/**/*.ts",
-    "src/types/ContextBrief.ts"
+    "src/types/ContextBrief.ts",
+    "tests/server/**/*.ts"
   ]
 }

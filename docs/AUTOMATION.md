@@ -14,8 +14,9 @@ The publisher now supports the standard GitHub Actions identity, bounded comment
 discovery, ownership checks and a final PR-state check before writing. Packaged
 end-to-end tests exercise the real CLI with fake GitHub/Bob services.
 
-**Do not enable live PR automation yet.** A real authenticated inference and real
-comment publication still require separate, explicitly approved smoke tests.
+A manual-only PR #3 smoke-test workflow is now prepared in
+`.github/workflows/compass-manual.yml`; see [DEMO.md](DEMO.md). Its live execution
+and bot publication remain unverified. Automatic PR-triggered execution is not enabled.
 Passing offline tests is not live-integration success.
 
 The React app remains an optional legacy viewer. It does not invoke Bob and is not

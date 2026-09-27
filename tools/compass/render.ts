@@ -19,7 +19,8 @@ import type { ContextBrief, SourceRecord } from '../../src/types/ContextBrief.js
 // ---------------------------------------------------------------------------
 
 export const COMPASS_MARKER = '<!-- compass:context-brief:v1 -->'
-export const COMPASS_HEADING = '### Compass'
+export const NORTH_IMAGE_URL = 'https://raw.githubusercontent.com/lixu4n/pr-compass/4ca316d1ded5a1e8c8a8ad84c927ea8c2b93a4b1/assets/north.png'
+export const COMPASS_HEADING = `### Compass\n\n<img src="${NORTH_IMAGE_URL}" alt="North, the Compass guide" width="64" />`
 export const WORD_CAP = 220
 export const WORD_FLOOR = 150
 

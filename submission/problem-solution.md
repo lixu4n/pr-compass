@@ -1,58 +1,32 @@
-# Problem & Solution Statement
+# Problem and solution
 
-**[OUTLINE — to be completed by the team. Maximum 500 words in the final submission.]**
+Reviewers of unfamiliar pull requests spend time reconstructing why a change
+exists and deciding which files deserve attention. A diff shows edits but does
+not necessarily explain the surrounding context or a useful reading order.
 
----
+PR Compass prepares a compact GitHub comment with three sections: Purpose,
+Relevant context, and Suggested reading order. Source links point reviewers to
+specific analyzed revisions. North, our visual guide, identifies the brief.
+Humans retain responsibility for review and approval.
 
-## The problem
+The automation collects PR metadata, changed-file patches, bounded source
+excerpts, and selected project documents. IBM Bob Shell (or the optional OpenAI provider) analyzes that bundle
+under restricted capabilities and returns structured JSON. TypeScript/Zod
+validation and a deterministic renderer produce the comment. The publisher
+checks PR eligibility and commit freshness before creating or updating its own
+bot comment. Collection is bounded and does not establish comprehensive caller
+or repository understanding.
 
-*(Describe the pain point. Who experiences it? When? What does it cost them?)*
+The real demonstration target is PR #3, which narrows search matching to titles
+while preserving case-insensitive matching and empty-result behavior. An existing
+user-posted Compass brief is visible on that PR. Verification of a new Actions-bot
+comment and its actual Bob usage remains pending.
 
-Code review is a critical quality gate, but it is frequently rushed or shallow — especially on
-pull requests in unfamiliar parts of the codebase. Reviewers must independently reconstruct context
-that the author already had: which behavior actually changes, which other files are affected, and
-which assumptions need validation. This context-building takes time and is often incomplete.
+The manual test workflow disables repair and requests a total 0.5-Bobcoin limit.
+It has no automatic PR trigger. A separate opt-in automatic workflow handles
+eligible PR events after repository setup. The Vercel-ready website demonstrates
+the flow and guides setup; its example states are not live results. The original
+React viewer remains available at `/demo`.
 
-*(Add team's specific observations and evidence here.)*
-
----
-
-## Our solution
-
-*(Describe PR Compass in concrete terms. What does it do? What does it NOT do?)*
-
-PR Compass is a review brief generator. A team member runs the `review-brief` Bob skill against a
-pull request. The skill analyzes the diff, inspects callers, reads project context, and produces
-a structured JSON document. That document is loaded by a single-page website that presents:
-
-1. **What changes** — behavioral differences with before/after comparisons.
-2. **Where to look** — an ordered list of the most relevant code locations.
-3. **What needs human judgment** — assumptions and open decisions.
-
-The website is a companion to the diff, not an approval system.
-
----
-
-## How it uses IBM Bob
-
-*(Be specific about which Bob capabilities are used and how.)*
-
-- The `review-brief` Bob skill guides Bob through a structured analysis workflow.
-- Bob reads the diff, runs targeted `grep` and `read_file` calls, and consults project documents.
-- Bob produces validated JSON matching a TypeScript/Zod schema.
-- Bob does not automatically approve, merge, or repair the PR.
-
-*(Add concrete examples from actual skill runs once the real PR is created.)*
-
----
-
-## What we measured
-
-*(Only include results that actually exist. Do not fabricate outcomes.)*
-
-No evaluation results exist yet. The evaluation protocol is defined in `evidence/evaluation.md`.
-Results will be added after the sample PR is created and analyzed.
-
----
-
-*Final statement must not exceed 500 words. Remove outline comments before submission.*
+No reviewer-time savings or accuracy improvement has been measured. Our
+submission distinguishes implementation and offline checks from live evidence.

@@ -15,7 +15,12 @@
     "lint": "eslint src --ext .ts,.tsx --report-unused-disable-directives --max-warnings 0",
     "build:action": "node scripts/build-action.mjs",
     "check:package": "node action-dist/index.mjs --check-package",
-    "test:action": "node scripts/build-action.mjs && node --test scripts/action-package.test.mjs scripts/action-pipeline.test.mjs"
+    "test:action": "node scripts/build-action.mjs && node --test scripts/action-package.test.mjs scripts/action-pipeline.test.mjs",
+    "build:server": "node scripts/build-server.mjs",
+    "build:all": "npm run build && npm run build:server",
+    "start": "node --env-file-if-exists=.env server-dist/index.mjs",
+    "test:server": "vitest run tests/server",
+    "typecheck:server": "tsc -p tsconfig.automation.json --noEmit"
   },
   "dependencies": {
     "@octokit/rest": "21.1.1",

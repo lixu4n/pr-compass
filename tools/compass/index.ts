@@ -27,6 +27,10 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { collect } from './collect.js'
+import { analyzeWithModel } from '../server/models.js'
+import { ActionProgress } from './progress.js'
+import type { AnalyzeResult } from './analyze.js'
+let progress: ActionProgress | undefined
 import { analyze, LiveBobProvider, redactSecrets } from './analyze.js'
 import { runtimeLimits } from './bob-runtime.js'
 import { validateBrief } from './validate.js'
@@ -130,6 +134,14 @@ async function main(): Promise<void> {
   const allowRepair = getBoolean('COMPASS_ALLOW_REPAIR')
   const acceptLicense = getBoolean('COMPASS_ACCEPT_BOB_LICENSE')
   const bobPath = getEnv('BOB_PATH', 'bob')
+  const providerName = getEnv('COMPASS_PROVIDER', 'bob')
+  if (!['bob', 'openai'].includes(providerName)) throw new Error('Unsupported model provider.')
+  const allowPrivate = getBoolean('COMPASS_ALLOW_PRIVATE')
+  const maxOutputTokens = Number(getEnv('COMPASS_MAX_OUTPUT_TOKENS', '2048'))
+  const model = getEnv('COMPASS_MODEL', 'gpt-4.1-mini')
+  if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 256 || maxOutputTokens > 4096 || !/^[a-zA-Z0-9._:-]{1,100}$/.test(model)) throw new Error('Invalid model settings.')
+  if (providerName === 'openai' && !process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is required.')
+  if (providerName === 'openai' && allowRepair) throw new Error('OpenAI repair is not supported; disable repair.')
   const limits = runtimeLimits({
     bobPath,
     maxCost: Number(getEnv('COMPASS_MAX_COST', '0.5')),
@@ -143,34 +155,57 @@ async function main(): Promise<void> {
   console.log(`Compass: analyzing ${owner}/${repo}#${prNumber}`)
   if (dryRun) console.log('Compass: DRY RUN — no comments will be posted')
 
+  if (getBoolean('COMPASS_PROGRESS')) {
+    progress = new ActionProgress(githubToken, owner, repo, getRequiredEnv('COMPASS_HEAD_SHA'))
+    await progress.start()
+  }
+  console.log('Compass: gathering context')
   // 2. Collect PR context
   const gitHubProvider = new OctokitGitHubProvider(githubToken)
   let collection: CollectionResult
 
   try {
-    const result = await collect(gitHubProvider, owner, repo, prNumber)
+    const result = await collect(gitHubProvider, owner, repo, prNumber, { allowPrivate })
     if ('skip' in result) {
       console.log(`Compass: skipping — ${result.reason}`)
-      process.exit(0)
+      await progress?.update('Skipped: PR is not eligible', 'neutral')
+      return
     }
     collection = result
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error(`Compass: collection failed — ${redactSecrets(msg)}`)
-    process.exit(1)
+    await progress?.update('Context collection failed', 'failure')
+    process.exitCode = 1
+    return
+  }
+  if (progress && progress.sha !== collection.headSha) {
+    await progress.update('Skipped: PR changed before analysis', 'neutral')
+    return
   }
 
   // 3. Read trusted instructions
   const trustedInstructions = await readTrustedInstructions()
 
-  // 4. Analyze with Bob
-  const bobProvider = new LiveBobProvider()
-  const analyzeResult = await analyze(collection, trustedInstructions, {
-    bobPath,
-    ...limits,
-    allowRepair,
-    acceptLicense,
-  }, bobProvider)
+  // 4. Analyze once using the chosen provider.
+  console.log('Compass: analyzing context')
+  await progress?.update('Analyzing context')
+  let analyzeResult: AnalyzeResult
+  if (providerName === 'openai') {
+    try {
+      const result = await analyzeWithModel(collection, trustedInstructions, {
+        repositoryId: 0, installationId: 0, ownerId: 0, fullName: `${owner}/${repo}`, private: allowPrivate,
+        encryptedKey: '', generation: '', consentAt: '', enabled: true, provider: 'openai', model,
+        maxOutputTokens, maxBobcoins: limits.maxCost, dailyRuns: 1, acceptLicense: false,
+      }, process.env.OPENAI_API_KEY!, bobPath)
+      analyzeResult = { ok: true, brief: result.brief }
+      console.log(`Compass: provider token usage ${JSON.stringify(result.usage)}; actual cost is available from your provider.`)
+    } catch {
+      analyzeResult = { ok: false, reason: 'OpenAI analysis failed. Check model access, credentials, credits, and output limits. No automatic retry was made.' }
+    }
+  } else {
+    analyzeResult = await analyze(collection, trustedInstructions, { bobPath, ...limits, allowRepair, acceptLicense }, new LiveBobProvider())
+  }
 
   let brief: ContextBrief
   if (!analyzeResult.ok) {
@@ -196,23 +231,29 @@ async function main(): Promise<void> {
 
   let outcome = 'dry-run (no GitHub writes)'
   if (publishProvider) {
+    console.log('Compass: posting comment')
+    await progress?.update('Posting comment')
     const result = await publish(publishProvider, {
       owner, repo, prNumber, body: commentBody,
-      analyzedHeadSha: collection.headSha,
+      analyzedHeadSha: collection.headSha, allowPrivate,
       analyzedBaseSha: collection.baseSha,
     })
     if (!result.ok) {
       console.error(`Compass: publish failed — ${redactSecrets(result.reason)}`)
+      await progress?.update('Comment publication failed', 'failure')
       process.exitCode = 1
       return
     }
     outcome = result.action
   }
   console.log(`Compass: ${outcome}; context status: ${brief.status}`)
+  await progress?.update(brief.status === 'unavailable' ? 'Brief unavailable' : dryRun ? 'Analysis saved (dry run)' : 'Brief posted',
+    brief.status === 'unavailable' ? 'failure' : dryRun ? 'neutral' : 'success')
   if (brief.status === 'unavailable') process.exitCode = 1
 }
 
-main().catch((err: unknown) => {
+main().catch(async (err: unknown) => {
+  try { await progress?.update('Compass run failed', 'failure') } catch { /* Workflow status remains failed. */ }
   const msg = err instanceof Error ? err.message : String(err)
   console.error(`Compass: fatal error — ${redactSecrets(msg)}`)
   process.exit(1)

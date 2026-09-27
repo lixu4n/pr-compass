@@ -73,7 +73,10 @@ globalThis.fetch = async (input, init) => {
   const method = init?.method ?? 'GET';
   const body = init?.body ? JSON.parse(String(init.body)) : null;
   appendFileSync(${JSON.stringify(requestsPath)}, JSON.stringify({method, path:url.pathname, body}) + '\\n');
+  if (url.origin === 'https://api.openai.com' && ${JSON.stringify(scenario)} === 'openai') return json({status:'completed',output:[{type:'message',content:[{type:'output_text',text:${JSON.stringify(JSON.stringify(prompt))}}]}],usage:{input_tokens:100,output_tokens:50}});
   if (url.origin !== 'https://api.github.com') return forbidden();
+  if (method === 'POST' && url.pathname === root + '/check-runs') return json({id:55},201);
+  if (method === 'PATCH' && url.pathname === root + '/check-runs/55') return json({id:55});
   if (method === 'GET' && url.pathname === root + '/pulls/42') return json({
     number:42,title:'Synthetic integration PR',body:'Rename an example helper.',state:'open',draft:false,
     user:{login:'synthetic-author',type:'User'},html_url:'https://github.com/owner/repo/pull/42',
@@ -112,6 +115,7 @@ globalThis.fetch = async (input, init) => {
         GITHUB_ACTIONS: 'true', GITHUB_TOKEN: 'synthetic-actions-token',
         BOB_API_KEY: 'synthetic-test-key', BOB_PATH: bob,
         COMPASS_ACCEPT_BOB_LICENSE: 'true', COMPASS_OUTPUT_DIR: outputDir,
+        ...(scenario === 'openai' ? {COMPASS_PROVIDER:'openai',OPENAI_API_KEY:'synthetic-openai-key',COMPASS_PROGRESS:'true',COMPASS_HEAD_SHA:HEAD} : {}),
         // Omitting the flag exercises the safer default dry-run behavior.
         ...(publish ? { COMPASS_DRY_RUN: 'false' } : {}),
       },
@@ -165,4 +169,18 @@ test('packaged failed analysis produces unavailable output and a failed job, not
   assert.equal(brief.status, 'unavailable')
   assert.match(markdown, /Context brief unavailable/)
   assert.ok(requests.some((request) => request.method === 'POST' && request.body.body.includes('Context brief unavailable')))
+})
+
+ test('packaged OpenAI flow makes one inference and reports progress through publication', async () => {
+  const {run, requests, brief} = await exercise('openai', true)
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(brief.status, 'ok')
+  const inference = requests.filter(r => r.path === '/v1/responses')
+  assert.equal(inference.length, 1)
+  assert.equal(inference[0].body.store, false)
+  assert.deepEqual(inference[0].body.tools, [])
+  const checks = requests.filter(r => r.path.includes('/check-runs'))
+  assert.deepEqual(checks.map(r => r.body.output.title), ['Gathering context', 'Analyzing context', 'Posting comment', 'Brief posted'])
+  assert.equal(checks.at(-1).body.conclusion, 'success')
+  assert.equal(requests.filter(r => r.method === 'POST' && r.path.endsWith('/comments')).length, 1)
 })
