@@ -46,6 +46,15 @@ jobs:
         env:
           BOB_API_KEY: ${{ secrets.COMPASS_BOB_API_KEY }}
         run: test -n "$BOB_API_KEY"
+      - name: Create Compass App token
+        id: compass-app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.COMPASS_APP_ID }}
+          private-key: ${{ secrets.COMPASS_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: write
+          permission-checks: write
       - name: Install Bob Shell from IBM
         shell: bash
         run: |
@@ -60,7 +69,8 @@ jobs:
           owner: lixu4n
           repo: pr-compass
           pr_number: '3'
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ steps.compass-app.outputs.token }}
+          app_slug: ${{ steps.compass-app.outputs.app-slug }}
           bob_api_key: ${{ secrets.COMPASS_BOB_API_KEY }}
           dry_run: 'false'
           allow_repair: 'false'
