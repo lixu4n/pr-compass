@@ -1,0 +1,77 @@
+name: Compass controlled PR 3 demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      authorize_run:
+        description: 'Authorize one paid analysis and bot comment on PR 3 (requested 0.5 Bobcoins)'
+        type: boolean
+        required: true
+        default: false
+      accept_bob_license:
+        description: 'Accept IBM Bob license for this isolated run'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compass-${{ github.repository }}-pr-3
+  cancel-in-progress: false
+
+jobs:
+  compass:
+    if: >-
+      github.repository == 'lixu4n/pr-compass' &&
+      github.ref == 'refs/heads/feat/compass-automation' &&
+      github.run_attempt == 1 &&
+      inputs.authorize_run && inputs.accept_bob_license
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out trusted workflow revision (never the PR head)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify secret exists before installation or inference
+        env:
+          BOB_API_KEY: ${{ secrets.COMPASS_BOB_API_KEY }}
+        run: test -n "$BOB_API_KEY"
+      - name: Install Bob Shell from IBM
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --location https://bob.ibm.com/download/bobshell.sh --output "$RUNNER_TEMP/bobshell.sh"
+          bash "$RUNNER_TEMP/bobshell.sh"
+          # The adapter rejects any version other than verified Bob Shell 2.0.5.
+          command -v bob
+          bob --version
+      - name: Generate and publish one context brief
+        uses: ./
+        with:
+          owner: lixu4n
+          repo: pr-compass
+          pr_number: '3'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          bob_api_key: ${{ secrets.COMPASS_BOB_API_KEY }}
+          dry_run: 'false'
+          allow_repair: 'false'
+          max_cost: '0.5'
+          max_turns: '4'
+          accept_bob_license: ${{ inputs.accept_bob_license }}
+      - name: Preserve exact brief and comment for verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compass-pr3-${{ github.run_id }}
+          path: compass-output/
+          if-no-files-found: ignore
+          retention-days: 7
