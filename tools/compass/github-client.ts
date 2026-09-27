@@ -76,8 +76,9 @@ export const ACTIONS_BOT_LOGIN = 'github-actions[bot]'
 export class OctokitPublishProvider implements GitHubPublishProvider {
   private octokit: Octokit
 
-  constructor(token: string, client?: Octokit) {
-    // This MVP supports GitHub.com's standard Actions GITHUB_TOKEN only.
+  constructor(token: string, client?: Octokit, private appSlug = '') {
+    if (appSlug && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(appSlug)) throw new Error('Invalid GitHub App slug.')
+    // App slug must come from the trusted token-generation step, never PR content.
     // GITHUB_ACTIONS is a setup guardrail, not proof of a token's identity.
     if (!token.trim()) throw new Error('GitHub publication requires GITHUB_TOKEN.')
     if (process.env.GITHUB_ACTIONS !== 'true') {
@@ -126,6 +127,6 @@ export class OctokitPublishProvider implements GitHubPublishProvider {
   async getBotLogin(): Promise<string> {
     // Installation tokens do not identify a user via GET /user. Match the
     // documented built-in Actions bot for this explicitly supported setup.
-    return ACTIONS_BOT_LOGIN
+    return this.appSlug ? `${this.appSlug}[bot]` : ACTIONS_BOT_LOGIN
   }
 }

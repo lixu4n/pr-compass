@@ -50,6 +50,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Create Compass App token
+        id: compass-app
+        if: vars.COMPASS_APP_ID != ''
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.COMPASS_APP_ID }}
+          private-key: ${{ secrets.COMPASS_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: write
+          permission-checks: write
       - name: Install IBM Bob Shell
         if: vars.COMPASS_PROVIDER != 'openai'
         run: |
@@ -64,7 +74,8 @@ jobs:
           owner: ${{ github.repository_owner }}
           repo: ${{ github.event.repository.name }}
           pr_number: ${{ github.event.pull_request.number }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ steps.compass-app.outputs.token || secrets.GITHUB_TOKEN }}
+          app_slug: ${{ steps.compass-app.outputs.app-slug }}
           provider: ${{ vars.COMPASS_PROVIDER || 'bob' }}
           bob_api_key: ${{ secrets.COMPASS_BOB_API_KEY }}
           openai_api_key: ${{ secrets.COMPASS_OPENAI_API_KEY }}

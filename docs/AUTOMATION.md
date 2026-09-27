@@ -222,9 +222,12 @@ overwrite one another. Unavailable output is saved too, but yields exit status 1
 The CLI prints artifact locations, not raw provider responses or credentials.
 
 To publish, set `dry_run: 'false'` explicitly inside a reviewed GitHub Actions
-workflow using the standard `secrets.GITHUB_TOKEN`. This MVP expects the built-in
-`github-actions[bot]` identity; it does not discover a user with `/user`. Local
-publication, PATs, custom App tokens and enterprise identities are unsupported.
+workflow using `secrets.GITHUB_TOKEN` (the `github-actions[bot]` identity), or a
+GitHub App installation token paired with `app_slug` from the trusted
+`actions/create-github-app-token` output. Never derive the slug from PR content.
+The publisher does not call `/user` for installation tokens. Local publication,
+PATs and enterprise identities are unsupported. App credentials belong only in
+repositories controlled by the app owner; never distribute its private key.
 The `GITHUB_ACTIONS` environment check is a setup guardrail, not token attestation.
 Do not spoof it to bypass the supported workflow.
 

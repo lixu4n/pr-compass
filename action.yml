@@ -22,9 +22,12 @@ inputs:
     required: true
   github_token:
     description: >
-      Standard GitHub Actions GITHUB_TOKEN with contents:read and pull-requests:write.
-      PATs and custom App tokens are not supported for publication. Never hard-code.
+      GitHub Actions token or App installation token with contents:read and pull-requests:write.
+      For an App token, supply app_slug from the token-generation step. Never hard-code.
     required: true
+  app_slug:
+    description: 'Verified app-slug output from actions/create-github-app-token; empty uses github-actions[bot]'
+    default: ''
   provider:
     description: 'Model provider: bob or openai'
     default: 'bob'
@@ -98,6 +101,7 @@ runs:
         INPUT_OWNER: ${{ inputs.owner }}
         INPUT_REPO: ${{ inputs.repo }}
         INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+        COMPASS_APP_SLUG: ${{ inputs.app_slug }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         BOB_API_KEY: ${{ inputs.bob_api_key }}
         COMPASS_PROVIDER: ${{ inputs.provider }}

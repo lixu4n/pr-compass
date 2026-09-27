@@ -95,11 +95,15 @@ globalThis.fetch = async (input, init) => {
   if (method === 'GET' && url.pathname.startsWith(root + '/contents/')) return json({message:'Not Found'},404);
   if (method === 'GET' && url.pathname === root + '/issues/42/comments') {
     if (${JSON.stringify(scenario)} === 'stale') head = 'c'.repeat(40);
-    return json([]);
+    return json(${JSON.stringify(scenario)} === 'openai' ? [
+      {id:70,body:${JSON.stringify(MARKER)}+'\\nOld Actions brief',user:{login:'github-actions[bot]'}},
+      {id:71,body:${JSON.stringify(MARKER)}+'\\nOld North brief',user:{login:'compass-by-north[bot]'}}
+    ] : []);
   }
   if (method === 'POST' && url.pathname === root + '/issues/42/comments') return json({
     id:123,body:body.body,user:{login:'github-actions[bot]'}
   },201);
+  if (method === 'PATCH' && url.pathname === root + '/issues/comments/71') return json({id:71});
   return forbidden();
 };
 `, 'utf8')
@@ -115,7 +119,7 @@ globalThis.fetch = async (input, init) => {
         GITHUB_ACTIONS: 'true', GITHUB_TOKEN: 'synthetic-actions-token',
         BOB_API_KEY: 'synthetic-test-key', BOB_PATH: bob,
         COMPASS_ACCEPT_BOB_LICENSE: 'true', COMPASS_OUTPUT_DIR: outputDir,
-        ...(scenario === 'openai' ? {COMPASS_PROVIDER:'openai',OPENAI_API_KEY:'synthetic-openai-key',COMPASS_PROGRESS:'true',COMPASS_HEAD_SHA:HEAD} : {}),
+        ...(scenario === 'openai' ? {COMPASS_APP_SLUG:'compass-by-north',COMPASS_PROVIDER:'openai',OPENAI_API_KEY:'synthetic-openai-key',COMPASS_PROGRESS:'true',COMPASS_HEAD_SHA:HEAD} : {}),
         // Omitting the flag exercises the safer default dry-run behavior.
         ...(publish ? { COMPASS_DRY_RUN: 'false' } : {}),
       },
@@ -182,5 +186,6 @@ test('packaged failed analysis produces unavailable output and a failed job, not
   const checks = requests.filter(r => r.path.includes('/check-runs'))
   assert.deepEqual(checks.map(r => r.body.output.title), ['Gathering context', 'Analyzing context', 'Posting comment', 'Brief posted'])
   assert.equal(checks.at(-1).body.conclusion, 'success')
-  assert.equal(requests.filter(r => r.method === 'POST' && r.path.endsWith('/comments')).length, 1)
+  assert.equal(requests.filter(r => r.method === 'POST' && r.path.endsWith('/comments')).length, 0)
+  assert.equal(requests.filter(r => r.method === 'PATCH' && r.path.endsWith('/comments/71')).length, 1)
 })

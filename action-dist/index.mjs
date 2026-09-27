@@ -9000,8 +9000,9 @@ var OctokitGitHubProvider = class {
 };
 var ACTIONS_BOT_LOGIN = "github-actions[bot]";
 var OctokitPublishProvider = class {
-  octokit;
-  constructor(token, client) {
+  constructor(token, client, appSlug = "") {
+    this.appSlug = appSlug;
+    if (appSlug && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(appSlug)) throw new Error("Invalid GitHub App slug.");
     if (!token.trim()) throw new Error("GitHub publication requires GITHUB_TOKEN.");
     if (process.env.GITHUB_ACTIONS !== "true") {
       throw new Error("Live publication is supported only in GitHub Actions; use dry-run locally.");
@@ -9011,6 +9012,7 @@ var OctokitPublishProvider = class {
     }
     this.octokit = client ?? createOctokit(token);
   }
+  octokit;
   async listComments(owner, repo, prNumber, page, perPage) {
     const { data } = await this.octokit.issues.listComments({
       owner,
@@ -9045,7 +9047,7 @@ var OctokitPublishProvider = class {
     };
   }
   async getBotLogin() {
-    return ACTIONS_BOT_LOGIN;
+    return this.appSlug ? `${this.appSlug}[bot]` : ACTIONS_BOT_LOGIN;
   }
 };
 
@@ -9134,7 +9136,7 @@ async function main() {
     maxTurns: Number(getEnv("COMPASS_MAX_TURNS", "4"))
   });
   const githubToken = process.env["GITHUB_TOKEN"] ?? "";
-  const publishProvider = dryRun ? null : new OctokitPublishProvider(githubToken);
+  const publishProvider = dryRun ? null : new OctokitPublishProvider(githubToken, void 0, getEnv("COMPASS_APP_SLUG"));
   console.log(`Compass: analyzing ${owner}/${repo}#${prNumber}`);
   if (dryRun) console.log("Compass: DRY RUN \u2014 no comments will be posted");
   if (getBoolean("COMPASS_PROGRESS")) {

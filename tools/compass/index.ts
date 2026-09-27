@@ -150,7 +150,7 @@ async function main(): Promise<void> {
 
   const githubToken = process.env['GITHUB_TOKEN'] ?? ''
   // Reject unsupported write setup before collection or any paid analysis.
-  const publishProvider = dryRun ? null : new OctokitPublishProvider(githubToken)
+  const publishProvider = dryRun ? null : new OctokitPublishProvider(githubToken, undefined, getEnv('COMPASS_APP_SLUG'))
 
   console.log(`Compass: analyzing ${owner}/${repo}#${prNumber}`)
   if (dryRun) console.log('Compass: DRY RUN — no comments will be posted')

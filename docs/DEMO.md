@@ -6,7 +6,11 @@
    `feat/compass-automation`. The manual workflow must also exist on the default
    branch for GitHub to expose `workflow_dispatch`; install only the workflow
    there if needed, then select the automation branch when dispatching.
-2. Store an Inference-scope Bob key as repository secret `COMPASS_BOB_API_KEY`.
+2. Install Compass by North on this repository. Add Actions variable `COMPASS_APP_ID`
+   and secret `COMPASS_APP_PRIVATE_KEY` (the complete PEM). The manual workflow
+   creates a repository-scoped installation token before inference. Never share
+   this private key with other users.
+   Store an Inference-scope Bob key as repository secret `COMPASS_BOB_API_KEY`.
    Never put the key in chat, source, screenshots, or a recording.
 3. Confirm account access and license acceptance. The workflow requires both
    authorization inputs. It installs Bob from IBM's official installer; the
@@ -21,7 +25,7 @@
 
 - Save the workflow run URL and its conclusion.
 - Download the run's brief/comment artifact and inspect status and provenance.
-- Open the actual `github-actions[bot]` comment. Confirm North loads, all three
+- Open the actual `compass-by-north[bot]` comment. Confirm North loads, all three
   sections render, source links resolve, and the analyzed base/head match the PR.
 - Preserve the existing user-authored comment; it is separate evidence.
 - Inspect actual Bob usage and record it without exposing credentials. A job
