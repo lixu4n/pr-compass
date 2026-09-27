@@ -1,52 +1,33 @@
-# IBM Bob Usage Statement
+# IBM Bob usage
 
-**[OUTLINE — to be completed by the team. Maximum 500 words in the final submission.]**
+PR Compass integrates IBM Bob Shell to turn collected pull-request context into a
+structured review brief. The adapter targets verified Bob Shell 2.0.5 and passes
+bounded input over stdin. It disables tool groups, MCP, and subagents, uses an
+isolated environment, and requires explicit license acceptance and an API key.
 
----
+The controlled live demo analyzed PR #3 with repair disabled, four turns,
+and a requested total limit of 0.5 Bobcoins. This requested limit is not an
+independently verified billing guarantee. Actual usage must be recorded from Bob.
+The resulting brief is validated, rendered, and published by our GitHub Action;
+Bob does not approve, merge, or modify the PR.
 
-## How we used IBM Bob
+The repository also includes the earlier `review-brief` Bob IDE skill for a
+structured review workflow. Its presence does not itself prove that a session
+executed every described step.
 
-*(Be specific. List the Bob features you used, with concrete examples.)*
+An existing user-posted Compass comment on PR #3 is visible. North App publication and an automatic PR #4 refresh have been verified; see
+[live evidence and accuracy caveats](../docs/LIVE-VERIFICATION.md). Actual usage
+verification and demo recording remain pending.
+Offline automated tests use fake Bob and GitHub services and do not demonstrate
+real inference.
 
-### Bob skill: `review-brief`
+Session evidence includes both teammates:
 
-We created a Bob skill at `.bob/skills/review-brief/SKILL.md` that guides Bob through a
-structured PR analysis workflow:
+- `bob_sessions/teammate-one/2026-09-26-bob-analysis.png` captures the actual Bob
+  IDE session showing test and type-check commands, an earlier sample-analysis
+  result, and writing/validating a review brief. It is development-session
+  evidence, not the controlled PR #3 run or its cost.
+- `bob_sessions/teammate-two/teammate-two_task02_contract_repair.png` is the
+  existing teammate-two evidence supplied in the repository.
 
-1. Bob identifies base and head commit SHAs from git metadata.
-2. Bob reads the diff and relevant file sections using `read_file` and `grep`.
-3. Bob inspects unchanged callers to identify breakage risk.
-4. Bob reads project context from `docs/sample-context/`.
-5. Bob produces a `ReviewBrief` JSON document matching our TypeScript/Zod schema.
-6. Bob validates the JSON before handing it back.
-
-### Bob as a development assistant
-
-*(Add specific examples of how Bob helped write code, types, tests, or documentation during
-initialization. Reference actual bob_sessions/ screenshots once they exist.)*
-
----
-
-## What Bob did not do
-
-- Bob did not automatically approve or merge any PR.
-- Bob did not access GitHub's API or authenticate to any external service.
-- Bob did not generate fake screenshots, session evidence, or benchmark results.
-- Bob did not implement the breaking change (404 response) — that is preserved for the real PR.
-
----
-
-## Session evidence
-
-Screenshots from Bob IDE task sessions are saved in:
-
-```
-bob_sessions/teammate-one/
-bob_sessions/teammate-two/
-```
-
-*(Reference specific screenshots here once they exist.)*
-
----
-
-*Final statement must not exceed 500 words. Remove outline comments before submission.*
+No fabricated screenshots or benchmark results are used.

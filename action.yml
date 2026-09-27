@@ -1,0 +1,120 @@
+name: 'Compass — PR Context Brief'
+description: >
+  Generates a compact, evidence-linked context comment on a pull request
+  using IBM Bob Shell or OpenAI. Identifies what changes, where to look, and what
+  context matters — without review verdicts or automatic approval.
+
+author: 'PR Compass team'
+
+branding:
+  icon: 'compass'
+  color: 'blue'
+
+inputs:
+  owner:
+    description: 'Repository owner (e.g. "octocat")'
+    required: true
+  repo:
+    description: 'Repository name (e.g. "my-repo")'
+    required: true
+  pr_number:
+    description: 'Pull request number'
+    required: true
+  github_token:
+    description: >
+      GitHub Actions token or App installation token with contents:read and pull-requests:write.
+      For an App token, supply app_slug from the token-generation step. Never hard-code.
+    required: true
+  app_slug:
+    description: 'Verified app-slug output from actions/create-github-app-token; empty uses github-actions[bot]'
+    default: ''
+  provider:
+    description: 'Model provider: bob or openai'
+    default: 'bob'
+  openai_api_key:
+    description: 'OpenAI API key from a repository secret'
+    default: ''
+  model:
+    description: 'OpenAI Responses-compatible model ID'
+    default: 'gpt-4.1-mini'
+  max_output_tokens:
+    description: 'OpenAI output token cap (256–4096), not a dollar budget'
+    default: '2048'
+  allow_private:
+    description: 'Explicit authorization to process private repository context'
+    default: 'false'
+  progress:
+    description: 'Write a Compass check (requires checks:write and head_sha)'
+    default: 'false'
+  head_sha:
+    description: 'Exact event PR head SHA for the progress check'
+    default: ''
+  bob_api_key:
+    description: >
+      IBM Bob Shell API key (Inference scope). Set as a repository secret.
+      The key is passed via environment variable; never logged or printed.
+      Live analysis is blocked when this is absent.
+    required: false
+    default: ''
+  bob_path:
+    description: 'Path to the bob executable (default: "bob")'
+    required: false
+    default: 'bob'
+  dry_run:
+    description: 'True by default: analyze without posting. Explicit false enables GitHub Actions publication; dry-run may still spend Bobcoins.'
+    required: false
+    default: 'true'
+  allow_repair:
+    description: 'One optional repair; splits max_cost between two invocations, not two full budgets'
+    required: false
+    default: 'false'
+  max_cost:
+    description: 'Requested total Bobcoin limit for analysis (greater than 0, at most 1); not a billing guarantee'
+    required: false
+    default: '0.5'
+  max_turns:
+    description: 'Per-invocation turn limit (integer 1–8)'
+    required: false
+    default: '4'
+  accept_bob_license:
+    description: 'Explicit IBM license acceptance for isolated headless runs; set true only with permission'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Node.js 24
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+
+    - name: Check Compass package (offline)
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: node action-dist/index.mjs --check-package
+
+    - name: Run Compass
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        INPUT_OWNER: ${{ inputs.owner }}
+        INPUT_REPO: ${{ inputs.repo }}
+        INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+        COMPASS_APP_SLUG: ${{ inputs.app_slug }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        BOB_API_KEY: ${{ inputs.bob_api_key }}
+        COMPASS_PROVIDER: ${{ inputs.provider }}
+        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        COMPASS_MODEL: ${{ inputs.model }}
+        COMPASS_MAX_OUTPUT_TOKENS: ${{ inputs.max_output_tokens }}
+        COMPASS_ALLOW_PRIVATE: ${{ inputs.allow_private }}
+        COMPASS_PROGRESS: ${{ inputs.progress }}
+        COMPASS_HEAD_SHA: ${{ inputs.head_sha }}
+        BOB_PATH: ${{ inputs.bob_path }}
+        COMPASS_DRY_RUN: ${{ inputs.dry_run }}
+        COMPASS_ALLOW_REPAIR: ${{ inputs.allow_repair }}
+        COMPASS_MAX_COST: ${{ inputs.max_cost }}
+        COMPASS_MAX_TURNS: ${{ inputs.max_turns }}
+        COMPASS_ACCEPT_BOB_LICENSE: ${{ inputs.accept_bob_license }}
+      run: node action-dist/index.mjs
