@@ -19,8 +19,9 @@ or repository understanding.
 
 The real demonstration target is PR #3, which narrows search matching to titles
 while preserving case-insensitive matching and empty-result behavior. An existing
-user-posted Compass brief is visible on that PR. Verification of a new Actions-bot
-comment and its actual Bob usage remains pending.
+user-posted Compass brief is visible on that PR. A live North App comment and automatic refresh on PR #4 are now verified.
+Actual Bob charges remain unverified. The PR #4 brief contained a workflow-description
+error despite passing structural validation; see [verification](../docs/LIVE-VERIFICATION.md).
 
 The manual test workflow disables repair and requests a total 0.5-Bobcoin limit.
 It has no automatic PR trigger. A separate opt-in automatic workflow handles

@@ -5,7 +5,7 @@ structured review brief. The adapter targets verified Bob Shell 2.0.5 and passes
 bounded input over stdin. It disables tool groups, MCP, and subagents, uses an
 isolated environment, and requires explicit license acceptance and an API key.
 
-The intended live demo is one analysis of PR #3 with repair disabled, four turns,
+The controlled live demo analyzed PR #3 with repair disabled, four turns,
 and a requested total limit of 0.5 Bobcoins. This requested limit is not an
 independently verified billing guarantee. Actual usage must be recorded from Bob.
 The resulting brief is validated, rendered, and published by our GitHub Action;
@@ -15,8 +15,9 @@ The repository also includes the earlier `review-brief` Bob IDE skill for a
 structured review workflow. Its presence does not itself prove that a session
 executed every described step.
 
-An existing user-posted Compass comment on PR #3 is visible. A new Actions-bot
-publication, actual usage verification, and demo recording remain pending.
+An existing user-posted Compass comment on PR #3 is visible. North App publication and an automatic PR #4 refresh have been verified; see
+[live evidence and accuracy caveats](../docs/LIVE-VERIFICATION.md). Actual usage
+verification and demo recording remain pending.
 Offline automated tests use fake Bob and GitHub services and do not demonstrate
 real inference.
 

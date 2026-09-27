@@ -25,7 +25,7 @@
 
 - Save the workflow run URL and its conclusion.
 - Download the run's brief/comment artifact and inspect status and provenance.
-- Open the actual `compass-by-north[bot]` comment. Confirm North loads, all three
+- Open the actual `compass-by-north[bot]` comment. Confirm North is the author avatar, all three
   sections render, source links resolve, and the analyzed base/head match the PR.
 - Preserve the existing user-authored comment; it is separate evidence.
 - Inspect actual Bob usage and record it without exposing credentials. A job
@@ -47,8 +47,9 @@ Record only after verification. No video has been recorded by this preparation.
 
 - Existing user-posted comment:
   https://github.com/lixu4n/pr-compass/pull/3#issuecomment-5849197168
-- Controlled Actions run: pending.
-- Actions-bot comment: pending.
+- Controlled Actions run: https://github.com/lixu4n/pr-compass/actions/runs/36296216148
+- North App comment: https://github.com/lixu4n/pr-compass/pull/3#issuecomment-5852849724
+- Automatic run and accuracy caveats: [LIVE-VERIFICATION.md](LIVE-VERIFICATION.md).
 - Actual Bob usage: pending.
 - Teammate one: `bob_sessions/teammate-one/2026-09-26-bob-analysis.png`.
 - Teammate two: `bob_sessions/teammate-two/teammate-two_task02_contract_repair.png`.

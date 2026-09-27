@@ -13,15 +13,22 @@ visual guide. Compass does not approve, merge, or edit the pull request.
 The repository contains an opt-in automatic GitHub workflow with IBM Bob and
 OpenAI providers, validated structured output, progress checks, and a comment
 publisher. The separate `compass-web` website contains the demo and setup guide;
-GitHub Actions runs the reviews. This repository retains the original brief viewer. Deployment and live integration are pending.
+GitHub Actions runs the reviews. This repository retains the original brief viewer. Live Bob analysis, North App publication, and automatic comment refresh have been verified. Website deployment and public onboarding remain pending.
 
 Start with [GitHub + Vercel setup](docs/VERCEL-GITHUB.md). The optional hosted
 GitHub App implementation is documented separately in [docs/GITHUB-APP.md](docs/GITHUB-APP.md).
 
-[PR #3](https://github.com/lixu4n/pr-compass/pull/3) is a real title-only search
-change. An [existing user-posted Compass comment](https://github.com/lixu4n/pr-compass/pull/3#issuecomment-5849197168)
-is visible. It is not evidence of publication by the Actions bot. A controlled
-Actions run, actual usage verification, and a recording are still pending.
+Verified runs and limitations are recorded in [live verification](docs/LIVE-VERIFICATION.md).
+[PR #3's North comment](https://github.com/lixu4n/pr-compass/pull/3#issuecomment-5852849724)
+demonstrates a real code-change brief. [PR #4's automatic brief](https://github.com/lixu4n/pr-compass/pull/4#issuecomment-5852888873)
+replaced the same bot comment after a new commit. Passing schema validation does
+not prove factual accuracy; the review found a workflow-description error in PR #4.
+Actual provider charges and the demo recording remain unverified.
+
+External users can install the workflow and supply their own model key today;
+without their own App configuration, it posts as `github-actions[bot]`.
+Installing the public Compass App alone does not enable reviews. Never distribute
+Compass's private key. See [external-user setup](docs/EXTERNAL-USERS.md).
 
 ## Controlled demo
 
