@@ -13,7 +13,7 @@ ARG INSTALL_BOB=false
 RUN if [ "$INSTALL_BOB" = "true" ]; then \
       apt-get update && apt-get install -y --no-install-recommends curl ca-certificates bash && \
       curl -fsSL https://bob.ibm.com/download/bobshell.sh -o /tmp/bobshell.sh && \
-      bash /tmp/bobshell.sh && command -v bob && bob --version && \
+      bash /tmp/bobshell.sh --pm npm --version 2.0.5 && command -v bob && bob --version && \
       rm /tmp/bobshell.sh && rm -rf /var/lib/apt/lists/*; \
     fi
 COPY --from=build /app/dist ./dist

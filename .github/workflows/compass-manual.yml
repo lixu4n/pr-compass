@@ -50,7 +50,7 @@ jobs:
         shell: bash
         run: |
           curl --fail --silent --show-error --location https://bob.ibm.com/download/bobshell.sh --output "$RUNNER_TEMP/bobshell.sh"
-          bash "$RUNNER_TEMP/bobshell.sh"
+          bash "$RUNNER_TEMP/bobshell.sh" --pm npm --version 2.0.5
           # The adapter rejects any version other than verified Bob Shell 2.0.5.
           command -v bob
           bob --version

@@ -54,7 +54,7 @@ jobs:
         if: vars.COMPASS_PROVIDER != 'openai'
         run: |
           curl -fsSL https://bob.ibm.com/download/bobshell.sh -o "$RUNNER_TEMP/bobshell.sh"
-          bash "$RUNNER_TEMP/bobshell.sh"
+          bash "$RUNNER_TEMP/bobshell.sh" --pm npm --version 2.0.5
           # Runtime refuses any unverified version before paid inference.
           command -v bob
           bob --version
