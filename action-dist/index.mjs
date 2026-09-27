@@ -8734,10 +8734,7 @@ var ActionProgress = class {
 
 // tools/compass/render.ts
 var COMPASS_MARKER = "<!-- compass:context-brief:v1 -->";
-var NORTH_IMAGE_URL = "https://raw.githubusercontent.com/lixu4n/pr-compass/4ca316d1ded5a1e8c8a8ad84c927ea8c2b93a4b1/assets/north.png";
-var COMPASS_HEADING = `### Compass
-
-<img src="${NORTH_IMAGE_URL}" alt="North, the Compass guide" width="64" />`;
+var COMPASS_HEADING = "### Compass";
 var WORD_CAP = 220;
 function escapeMarkdown(text) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/([\\`*_{}[\]()#+\-.!|])/g, "\\$1").replace(/@(\w)/g, "@\u200B$1").replace(/#(\d+)/g, "#\u200B$1");
