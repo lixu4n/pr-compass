@@ -77,8 +77,8 @@ export type SourceRecord = z.infer<typeof SourceRecordSchema>
 // ---------------------------------------------------------------------------
 
 export const PurposeSchema = z.object({
-  /** One-sentence summary, ≤120 chars */
-  summary: z.string().max(120),
+  /** One-sentence summary, ≤300 chars */
+  summary: z.string().max(300),
   basis: EvidenceBasisSchema,
   /**
    * Source ID of the PR body / title passage that supports this summary.

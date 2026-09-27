@@ -4651,8 +4651,8 @@ var SourceRecordSchema = external_exports.object({
   snippet: external_exports.union([external_exports.string(), external_exports.null()])
 });
 var PurposeSchema = external_exports.object({
-  /** One-sentence summary, ≤120 chars */
-  summary: external_exports.string().max(120),
+  /** One-sentence summary, ≤300 chars */
+  summary: external_exports.string().max(300),
   basis: EvidenceBasisSchema,
   /**
    * Source ID of the PR body / title passage that supports this summary.

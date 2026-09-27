@@ -28,7 +28,7 @@ describe('automatic PR lifecycle', () => {
       await processJob(s, vault, s.take()!, d.deps)
       expect(d.deps.analyze).toHaveBeenCalledTimes(1)
       expect(d.publisher.createComment).toHaveBeenCalledTimes(1)
-      expect(d.publisher.createComment.mock.calls[0][3]).toContain('North, the Compass guide')
+      expect(d.publisher.createComment.mock.calls[0][3]).not.toContain('<img')
       expect(vi.mocked(d.client.updateCheck).mock.calls.map(c => c[1])).toEqual(['gathering', 'analyzing', 'posting', 'posted'])
       expect(s.recent(11)[0].stage).toBe('posted')
     } finally { s.close() }

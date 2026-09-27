@@ -50,10 +50,17 @@ describe('ContextBriefSchema — field constraints', () => {
     expect(ContextBriefSchema.safeParse(brief).success).toBe(false)
   })
 
-  it('rejects purpose summary exceeding 120 chars', () => {
+  it('accepts a purpose summary at the 300-character boundary without truncation', () => {
+    const summary = 'x'.repeat(300)
+    const brief = makeOkBrief({ purpose: { summary, basis: 'declared', sourceId: null } })
+    const result = ContextBriefSchema.parse(brief)
+    expect(result.purpose?.summary).toBe(summary)
+  })
+
+  it('rejects purpose summary exceeding 300 chars', () => {
     const brief = makeOkBrief({
       purpose: {
-        summary: 'x'.repeat(121),
+        summary: 'x'.repeat(301),
         basis: 'declared',
         sourceId: null,
       },

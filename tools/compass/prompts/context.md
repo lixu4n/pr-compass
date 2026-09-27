@@ -20,7 +20,7 @@ A string: `ok`, `partial`, or `unavailable`.
 
 ### purpose
 An OBJECT, not a string, or null. A non-null object has exactly:
-- `summary`: a short string, at most 120 characters.
+- `summary`: a short string, at most 300 characters; aim for one concise sentence under 200 characters.
 - `basis`: `declared`, `inferred`, or `unknown`.
 - `sourceId`: one exact ID from the input manifest, or null when no source establishes intent.
 
